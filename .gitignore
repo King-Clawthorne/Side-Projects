@@ -1,0 +1,73 @@
+# ----------------------------------------------------------------------------
+# Unity (Color Jumper)
+# ----------------------------------------------------------------------------
+# Generated / cache folders (can appear at repo root or inside a Unity project)
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+
+# Unity .meta files (ignored by request — note: Unity normally expects these
+# to be committed so asset references/GUIDs are preserved across machines)
+*.meta
+
+# Unity recovery / autosave artifacts
+**/_Recovery/
+
+# Visual Studio / Rider / VS Code project files
+.vs/
+.idea/
+.vscode/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.tmp
+
+# Unity crash reports
+sysinfo.txt
+crashlytics-build.properties
+
+# Built players / packages
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# ----------------------------------------------------------------------------
+# CUDA / C++ (Terrain Glacier)
+# ----------------------------------------------------------------------------
+# Compiled objects and intermediates
+*.o
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# CUDA fatbins / device link artifacts
+*.cu.obj
+*.fatbin
+*.ptx
+*.cubin
+
+# Large generated heightmap output (regenerate via terrain_glacier)
+Terrain/height_initial.raw
+
+# ----------------------------------------------------------------------------
+# OS / editor noise
+# ----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+*.swp
