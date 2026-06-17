@@ -4,13 +4,11 @@ non-negative integers a, b, generating the answer digit by digit.
 
 Heavily fused for a Linux + NVIDIA-GPU setup:
   * torch.compile()                  -- fuses the model graph (needs Triton).
-  * Liger RoPE / SiLU-Mul / RMSNorm  -- fused Triton kernels.
+  * Liger SiLU-Mul / RMSNorm         -- fused Triton kernels.
   * Fused scaled-dot-product attention (FlashAttention via SDPA, is_causal).
   * SwiGLU feed-forward.
   * Fused AdamW.
-  * LigerFusedLinearCrossEntropyLoss -- fuses the LM-head projection with the
-                                        cross-entropy, never materializing the
-                                        (N, vocab) logits during training.
+  * Learned absolute positional embeddings.
 
 Install the extras (Linux only):
     pip install liger-kernel triton
@@ -36,11 +34,7 @@ import torch.nn.functional as F
 
 # --- Liger fused Triton kernels (Linux + CUDA only) ------------------------- #
 try:
-    from liger_kernel.transformers import (
-        LigerRMSNorm,
-        LigerFusedLinearCrossEntropyLoss,
-    )
-    from liger_kernel.ops.rope import LigerRopeFunction
+    from liger_kernel.transformers import LigerRMSNorm
     from liger_kernel.ops.swiglu import LigerSiLUMulFunction
 except ImportError as e:  # pragma: no cover
     raise ImportError(
@@ -77,7 +71,6 @@ N_LAYERS     = 2
 D_FF         = 512
 DROPOUT      = 0.0
 
-ROPE_BASE     = 10000.0     # rotary position embedding base frequency
 RMS_EPS       = 1e-6
 
 N_SAMPLES    = 400_000      # random examples
@@ -148,19 +141,6 @@ def make_dataset(n_samples=N_SAMPLES, seed=SEED):
 
 
 # ----------------------------------------------------------------------------- #
-# Rotary position embeddings (RoPE, Su et al. 2021), Liger NeoX convention.
-# ----------------------------------------------------------------------------- #
-def build_rope_cache(seq_len, head_dim, device, base=ROPE_BASE):
-    """Precompute (cos, sin) of shape (1, seq_len, head_dim) for LigerRopeFunction."""
-    inv_freq = 1.0 / (base ** (
-        torch.arange(0, head_dim, 2, device=device).float() / head_dim))
-    pos = torch.arange(seq_len, device=device).float()
-    freqs = torch.outer(pos, inv_freq)                # (seq_len, head_dim // 2)
-    emb = torch.cat([freqs, freqs], dim=-1)           # (seq_len, head_dim)
-    return emb.cos()[None], emb.sin()[None]           # (1, seq_len, head_dim)
-
-
-# ----------------------------------------------------------------------------- #
 # Model
 # ----------------------------------------------------------------------------- #
 class SwiGLU(nn.Module):
@@ -180,13 +160,10 @@ class SwiGLU(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    """Causal multi-head self-attention with QK-norm, QK-gain and RoPE, using
-    fused scaled-dot-product attention.
+    """Causal multi-head self-attention with QK-norm, using fused
+    scaled-dot-product attention.
 
     QK-norm : RMS-normalize query/key vectors along the head dim.
-    QK-gain : a learnable per-head scalar replacing the fixed softmax scale;
-              folded into the query so SDPA runs with scale=1.
-    RoPE    : Liger fused rotary embedding on queries and keys.
     """
 
     def __init__(self, d_model, n_heads, dropout=0.0):
@@ -201,31 +178,21 @@ class MultiHeadAttention(nn.Module):
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
         self.dropout = dropout
 
-        # QK-gain: one learnable scalar per head, init at the usual 1/sqrt(d) scale.
-        init_gain = self.head_dim ** -0.5
-        self.qk_gain = nn.Parameter(torch.full((n_heads, 1, 1), float(init_gain)))
-
-    def forward(self, x, rope=None):
+    def forward(self, x):
         B, T, _ = x.shape
         # (B, n_heads, T, head_dim)
         q = self.q_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
 
-        # QK-norm: RMS-normalize along head_dim, then fold in the per-head gain.
+        # QK-norm: RMS-normalize along head_dim.
         q = F.normalize(q, p=2, dim=-1) * (self.head_dim ** 0.5)
         k = F.normalize(k, p=2, dim=-1) * (self.head_dim ** 0.5)
-        q = q * self.qk_gain[None]                        # (1, H, 1, 1) broadcast
-
-        # RoPE (Liger fused) on queries and keys.
-        if rope is not None:
-            cos, sin = rope
-            q, k = LigerRopeFunction.apply(q, k, cos.to(q.dtype), sin.to(q.dtype))
 
         # Fused causal SDPA (FlashAttention). Right-padding + causality means no
-        # explicit pad mask is needed. scale=1 since the gain is already folded in.
+        # explicit pad mask is needed. Default scale = 1/sqrt(head_dim).
         out = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True, scale=1.0,
+            q, k, v, is_causal=True,
             dropout_p=self.dropout if self.training else 0.0)
         out = out.transpose(1, 2).reshape(B, T, -1)
         return self.out_proj(out)
@@ -242,21 +209,21 @@ class DecoderLayer(nn.Module):
         self.ff = SwiGLU(d_model, d_ff)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, rope=None):
-        x = x + self.dropout(self.attn(self.norm1(x), rope))
+    def forward(self, x):
+        x = x + self.dropout(self.attn(self.norm1(x)))
         x = x + self.dropout(self.ff(self.norm2(x)))
         return x
 
 
 class TransformerLM(nn.Module):
     """Returns final hidden states (B, T, D_MODEL); the LM-head projection is
-    fused into the loss during training (LigerFusedLinearCrossEntropyLoss) and
-    applied via `self.head` for evaluation / generation."""
+    applied via `self.head` for loss, evaluation and generation."""
 
     def __init__(self):
         super().__init__()
         self.tok_emb = nn.Embedding(VOCAB_SIZE, D_MODEL)
-        # Positions are encoded with RoPE inside attention (no learned pos_emb).
+        # Learned absolute positional embeddings (sequences are at most MAX_LEN).
+        self.pos_emb = nn.Embedding(MAX_LEN, D_MODEL)
 
         self.layers = nn.ModuleList(
             DecoderLayer(D_MODEL, N_HEADS, D_FF, DROPOUT)
@@ -268,20 +235,16 @@ class TransformerLM(nn.Module):
     def forward(self, x):
         # x: (B, T) token ids -> hidden states (B, T, D_MODEL)
         B, T = x.shape
-        rope = build_rope_cache(T, D_MODEL // N_HEADS, x.device)
-        h = self.tok_emb(x)
+        pos = torch.arange(T, device=x.device)
+        h = self.tok_emb(x) + self.pos_emb(pos)[None]
         for layer in self.layers:
-            h = layer(h, rope)
+            h = layer(h)
         return self.norm(h)
 
 
 # ----------------------------------------------------------------------------- #
 # Train / eval
 # ----------------------------------------------------------------------------- #
-# Fused linear + cross-entropy: never materializes the (N, vocab) logits.
-fused_lce = LigerFusedLinearCrossEntropyLoss(ignore_index=IGNORE_INDEX)
-
-
 @torch.no_grad()
 def evaluate(fwd, head, x, y):
     """Teacher-forced loss and answer-token accuracy over device-resident data."""
@@ -367,11 +330,12 @@ def main():
             with torch.autocast(device_type=DEVICE, dtype=AMP_DTYPE,
                                 enabled=USE_AMP):
                 hidden = fwd(xb)
-            # Fused linear-CE in fp32: head weight stays a leaf (grad flows),
-            # and the (N, vocab) logits are never materialized.
-            loss = fused_lce(model.head.weight,
-                             hidden.float().reshape(-1, D_MODEL),
-                             yb.reshape(-1))
+                logits = model.head(hidden)
+            # Cross-entropy in fp32 over answer tokens only.
+            loss = F.cross_entropy(
+                logits.float().reshape(-1, VOCAB_SIZE),
+                yb.reshape(-1),
+                ignore_index=IGNORE_INDEX)
             loss.backward()
             for opt in optimizers:
                 opt.step()
