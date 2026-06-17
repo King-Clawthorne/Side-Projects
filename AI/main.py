@@ -31,7 +31,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from attention import MultiHeadAttention
+from attention import HigherOrderAttention
 
 # --- Liger fused Triton kernels (Linux + CUDA only) ------------------------- #
 try:
@@ -167,7 +167,7 @@ class DecoderLayer(nn.Module):
     def __init__(self, d_model, n_heads, d_ff, dropout=0.0):
         super().__init__()
         self.norm1 = LigerRMSNorm(d_model, eps=RMS_EPS)
-        self.attn = MultiHeadAttention(d_model, n_heads, dropout)
+        self.attn = HigherOrderAttention(d_model, n_heads, dropout)
         self.norm2 = LigerRMSNorm(d_model, eps=RMS_EPS)
         self.ff = SwiGLU(d_model, d_ff)
         self.dropout = nn.Dropout(dropout)
