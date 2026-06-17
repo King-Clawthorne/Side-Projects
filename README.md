@@ -111,10 +111,49 @@ python AI/idea.py
 
 ---
 
+## 4. Adaptive Cross-Entropy with Learnable Log Base
+
+A classification analog of the adaptive loss: an MLP trained with a cross-entropy loss whose log base (equivalently, temperature) is a learned parameter, recovering the planted label uncertainty rather than assuming standard Gaussian-like labels.
+
+### Situation (Adaptive CE)
+
+Standard cross-entropy fixes the log base at *e* (temperature T=1), implicitly assuming a specific sharpness of the label distribution. When labels are soft or uncertain — sampled from a high-temperature softmax — this mismatch leads to a miscalibrated model.
+
+### Task (Adaptive CE)
+
+Design a learnable cross-entropy whose temperature T = 1/log(b) adapts to the label uncertainty in the data, and verify it recovers a planted temperature that standard CE cannot detect.
+
+### Action (Adaptive CE)
+
+Implemented `AI/idea2.py`, the classification analog of `idea.py`:
+
+- **`AdaptiveTemperatureLoss`** — wraps `F.cross_entropy(logits / T, targets)` where T is a sigmoid-bounded learnable parameter. The temperature-scaled NLL is the full NLL of a softmax model at temperature T (not just a scaled version of standard CE), so it is identifiable with weight decay preventing T→0 collapse.
+- **Degeneracy analysis** — the bare log_b loss is a 1/log(b) scaling of standard CE; minimizing over b alone always pushes b→∞. The fix is using the full temperature-scaled NLL where T enters inside the log-sum-exp.
+- **Synthetic benchmark** — labels sampled from softmax(f*(x)/T_planted); adaptive model learns T alongside the network, baseline uses standard CE (T=1).
+
+### Result (Adaptive CE)
+
+With planted temperature T=2.5 (soft labels), the adaptive model converges to T≈2.5 and achieves lower NLL than standard CE.
+
+| Model         | T (learned) | log base b  |
+| ------------- | ----------- | ----------- |
+| Adaptive CE   | ≈ 2.5       | ≈ e^(1/2.5) |
+| Standard CE   | 1.00 (fixed)| e (fixed)   |
+
+```bash
+python AI/idea2.py
+# outputs training_curves2.png and results2.png
+```
+
+**Tech:** PyTorch, CUDA, NumPy, Matplotlib, temperature scaling, Tsallis/Rényi cross-entropy.
+
+---
+
 ## Repository Layout
 
-| Path               | Project                                                       |
-| ------------------ | ------------------------------------------------------------- |
-| `SmallGameAssets/` | Color Jumper Unity game (prefabs, scenes, scripts, settings)  |
-| `Terrain/`         | CUDA terrain & glaciation simulator and RAW outputs           |
-| `AI/`              | Adaptive generalized-RMSE regression with learnable α         |
+| Path               | Project                                                          |
+| ------------------ | ---------------------------------------------------------------- |
+| `SmallGameAssets/` | Color Jumper Unity game (prefabs, scenes, scripts, settings)     |
+| `Terrain/`         | CUDA terrain & glaciation simulator and RAW outputs              |
+| `AI/idea.py`       | Adaptive generalized-RMSE regression with learnable exponent α   |
+| `AI/idea2.py`      | Adaptive cross-entropy with learnable log base (temperature)     |
