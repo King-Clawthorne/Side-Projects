@@ -31,7 +31,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from attention import HigherOrderAttention
+from attention import HigherOrderAttention, DepthAttention
 
 # --- Liger fused Triton kernels (Linux + CUDA only) ------------------------- #
 try:
@@ -194,6 +194,16 @@ class TransformerLM(nn.Module):
             DecoderLayer(D_MODEL, N_HEADS, D_FF, MAX_LEN - 1, DROPOUT)
             for _ in range(N_LAYERS)
         )
+
+        # Depth attention replaces the fixed unit-weight residual stream: instead
+        # of feeding layer l the previous layer's output, each layer's input is a
+        # learned, sparse, higher-order aggregation over *all* preceding outputs
+        # (embedding + earlier layers). The i-th aggregator sees L = i+1 outputs;
+        # the final one sees all N_LAYERS+1 and produces the LM-head hidden state.
+        self.depth_attns = nn.ModuleList(
+            DepthAttention(D_MODEL, num_outputs=i + 1)
+            for i in range(N_LAYERS + 1)
+        )
         self.norm = LigerRMSNorm(D_MODEL, eps=RMS_EPS)
         self.head = nn.Linear(D_MODEL, VOCAB_SIZE, bias=False)
 
@@ -202,8 +212,16 @@ class TransformerLM(nn.Module):
         B, T = x.shape
         pos = torch.arange(T, device=x.device)
         h = self.tok_emb(x) + self.pos_emb(pos)[None]
-        for layer in self.layers:
-            h = layer(h)
+
+        # Residual stream as depth attention: collect every layer output and let
+        # each layer attend over the ones produced so far (convex weights -> the
+        # aggregate stays norm-bounded with depth instead of compounding).
+        outputs = [h]
+        for layer, depth in zip(self.layers, self.depth_attns):
+            stack = torch.stack(outputs, dim=2)          # (B, T, L, D)
+            inp = depth(stack)                           # (B, T, D)
+            outputs.append(layer(inp))
+        h = self.depth_attns[-1](torch.stack(outputs, dim=2))
         return self.norm(h)
 
 
