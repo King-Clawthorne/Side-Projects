@@ -106,7 +106,7 @@ class AdaptivePowerLoss(nn.Module):
 # A small regression network
 # -----------------------------------------------------------------------------
 class MLP(nn.Module):
-    def __init__(self, in_dim: int = 1, hidden: int = 64, out_dim: int = 1):
+    def __init__(self, in_dim: int = 1, hidden: int = 2, out_dim: int = 1):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_dim, hidden), nn.GELU(),
@@ -144,7 +144,7 @@ def make_dataset(n=4000, noise_shape=1.2, noise_scale=0.3, seed=0):
 # -----------------------------------------------------------------------------
 # Training
 # -----------------------------------------------------------------------------
-def train(model, loss_fn, x, y, epochs=3000, log_every=500):
+def train(model, loss_fn, x, y, epochs=2000, log_every=250):
     has_params = len(list(loss_fn.parameters())) > 0
     # mild weight decay on the network stops it from fitting (and thinning) the
     # noise, which would otherwise bias the shape estimate upward. The loss's own
