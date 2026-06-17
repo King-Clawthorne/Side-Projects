@@ -83,7 +83,7 @@ LAYERSCALE_INIT = 1e-1      # per-channel residual-branch scale init (CaiT Layer
 ROPE_BASE     = 10000.0     # rotary position embedding base frequency
 RMS_EPS       = 1e-6
 
-N_SAMPLES    = 600_000      # random examples (floats make full enumeration huge)
+N_SAMPLES    = 400_000      # random examples (floats make full enumeration huge)
 BATCH_SIZE   = 512
 EPOCHS       = 100
 LR           = 1e-3          # AdamW lr (embeddings, head, biases, norms)
