@@ -77,7 +77,7 @@ DROPOUT      = 0.1
 RMS_EPS       = 1e-6
 
 BATCH_SIZE   = 256
-EPOCHS       = 100
+EPOCHS       = 10_000
 LR           = 1e-3          # AdamW lr (all parameters)
 WEIGHT_DECAY = 1e-2
 WARMUP_FRAC  = 0.05          # fraction of training steps spent in linear warmup
@@ -305,7 +305,7 @@ def main():
             for sched in schedulers:
                 sched.step()
 
-        if epoch % 10 == 0 or epoch == EPOCHS or epoch == 1:
+        if epoch % 1000 == 0 or epoch == EPOCHS or epoch == 1:
             tr_loss, tr_acc = evaluate(fwd, model.head, train_x, train_y)
             te_loss, te_acc = evaluate(fwd, model.head, test_x, test_y)
             print(f"epoch {epoch:3d} | "
@@ -377,7 +377,7 @@ def demo(model):
         pred = _decode(generate(model, prompt))
 
         true = str((a_val - b_val if op == "-" else a_val + b_val) % mod)
-        print(f"{a:>3} {op} {b:>3} % {mod:>2} = {pred:>3}   (true {true})")
+        print(f"{a:>1} {op} {b:>1} % {mod:>1} = {pred:>1} (true {true})")
 
 
 if __name__ == "__main__":
