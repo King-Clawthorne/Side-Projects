@@ -229,7 +229,7 @@ def main():
     axes_t[0].set_xlabel("epoch")
     axes_t[0].set_ylabel("loss")
     axes_t[0].set_yscale("linear")
-    axes_t[0].set_xscale("linear")
+    axes_t[0].set_xscale("log")
     axes_t[0].set_title("Loss vs epoch")
     axes_t[0].legend()
 
@@ -237,7 +237,7 @@ def main():
     axes_t[1].axhline(PLANTED_SHAPE, linestyle="--", color="black", linewidth=1, label=f"planted α={PLANTED_SHAPE}")
     axes_t[1].set_xlabel("epoch")
     axes_t[1].set_ylabel("alpha")
-    axes_t[1].set_xscale("linear")
+    axes_t[1].set_xscale("log")
     axes_t[1].set_title("Alpha vs epoch  (adaptive model)")
     axes_t[1].legend()
 

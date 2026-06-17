@@ -21,6 +21,13 @@ the standard loss.  For any fixed model output, the optimizer can shrink the
 loss to zero by pushing b -> infinity (log b -> inf), with no improvement in
 fit.  The base is not identifiable from the bare scaled loss.
 
+A second trap: hard-sampled labels.  If you first draw hard labels from
+softmax(f*(x)/T_true) and then train, the temperature signal is destroyed --
+the labels look like ordinary noisy one-hot targets, and the model + T can
+collude (learn overconfident logits and push T -> T_min).  The fix is the
+same as in the regression case: observe the full continuous noise, i.e.
+use soft labels (the probabilities themselves) rather than samples from them.
+
 ------------------------------------------------------------------------------
 The fix: use the full temperature-scaled NLL
 ------------------------------------------------------------------------------
@@ -81,7 +88,9 @@ class AdaptiveTemperatureLoss(nn.Module):
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         T = self.temperature
-        return F.cross_entropy(logits / T, targets)
+        # soft-label CE: -sum_k p_k * log softmax(f/T)_k
+        log_probs = F.log_softmax(logits / T, dim=1)
+        return -(targets * log_probs).sum(dim=1).mean()
 
 
 # -----------------------------------------------------------------------------
@@ -105,13 +114,17 @@ class MLP(nn.Module):
 # -----------------------------------------------------------------------------
 def make_dataset(n: int = 4000, in_dim: int = 4, n_classes: int = 4,
                  planted_temp: float = 2.5, seed: int = 0):
-    """Generate classification data whose labels are drawn from
-    softmax(W_true @ x / planted_temp).  The true decision boundary is linear;
-    label uncertainty is entirely controlled by planted_temp."""
+    """Generate classification data with *soft* labels from softmax(W*x / T).
+
+    Soft labels preserve the planted temperature signal.  Hard-sampled labels
+    would discard it — the model could then collapse T->0 with no penalty,
+    the same degeneracy as the bare log_b loss.  This is the classification
+    analog of observing continuous noisy residuals rather than rounded values.
+    """
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
 
-    W_true = torch.randn(n_classes, in_dim) * 0.8   # fixed true weight matrix
+    W_true = torch.randn(n_classes, in_dim) * 0.8
 
     x = rng.standard_normal((n, in_dim)).astype(np.float32)
     x_t = torch.from_numpy(x)
@@ -120,8 +133,7 @@ def make_dataset(n: int = 4000, in_dim: int = 4, n_classes: int = 4,
         logits_true = x_t @ W_true.T                               # (n, n_classes)
         probs = torch.softmax(logits_true / planted_temp, dim=1)   # soft labels
 
-    y = torch.multinomial(probs, num_samples=1).squeeze(1)         # hard labels
-    return x_t, y
+    return x_t, probs   # probs shape: (n, n_classes)
 
 
 # -----------------------------------------------------------------------------
@@ -162,12 +174,46 @@ def train(model, loss_fn, x, y, epochs: int = 3000, log_every: int = 500):
     return history
 
 
-def evaluate(model, loss_fn, x, y):
+def calibrate(model, loss_fn, x, y, epochs: int = 1000, log_every: int = 200):
+    """Phase 2: freeze the model and learn T only (temperature scaling)."""
+    for p in model.parameters():
+        p.requires_grad_(False)
+
+    opt = torch.optim.Adam(loss_fn.parameters(), lr=3e-2)
+    history = {"epoch": [], "loss": [], "temperature": []}
+
+    for epoch in range(1, epochs + 1):
+        opt.zero_grad()
+        with torch.no_grad():
+            logits = model(x)
+        loss = loss_fn(logits, y)
+        loss.backward()
+        opt.step()
+
+        history["epoch"].append(epoch)
+        history["loss"].append(loss.item())
+        history["temperature"].append(float(loss_fn.temperature.detach()))
+
+        if epoch % log_every == 0 or epoch == 1:
+            T = float(loss_fn.temperature.detach())
+            b = float(loss_fn.base.detach())
+            print(f"  epoch {epoch:5d} | loss {loss.item():8.4f} | "
+                  f"T {T:6.3f} | base {b:6.3f}")
+
+    for p in model.parameters():
+        p.requires_grad_(True)
+
+    return history
+
+
+def evaluate(model, loss_fn, x, y_soft):
     with torch.no_grad():
         logits = model(x)
         T = loss_fn.temperature if hasattr(loss_fn, "temperature") else torch.tensor(1.0)
-        nll = F.cross_entropy(logits / T, y).item()
-        acc = (logits.argmax(dim=1) == y).float().mean().item()
+        log_probs = F.log_softmax(logits / T, dim=1)
+        nll = -(y_soft * log_probs).sum(dim=1).mean().item()
+        # accuracy: predicted class vs most likely true class
+        acc = (logits.argmax(dim=1) == y_soft.argmax(dim=1)).float().mean().item()
     return nll, acc
 
 
@@ -186,63 +232,70 @@ def main():
 
     print(f"Planted temperature (target for T): {PLANTED_TEMP}\n")
 
-    print("[1] Adaptive cross-entropy (temperature is learned):")
-    model_a = MLP(in_dim=IN_DIM, n_classes=N_CLASSES).to(device)
-    loss_a = AdaptiveTemperatureLoss(init_T=1.0).to(device)
-    hist_a = train(model_a, loss_a, x, y)
-    nll_a, acc_a = evaluate(model_a, loss_a, x, y)
-    learned_T = float(loss_a.temperature.detach())
-    learned_b = float(loss_a.base.detach())
+    # ------------------------------------------------------------------
+    # Phase 1: train a shared model with standard CE (T=1)
+    # ------------------------------------------------------------------
+    soft_ce = lambda logits, targets: -(targets * F.log_softmax(logits, dim=1)).sum(dim=1).mean()
+    soft_ce.parameters = lambda: iter([])   # duck-type so train() works
+
+    print("[Phase 1] Pre-training model with standard CE (T=1):")
+    model = MLP(in_dim=IN_DIM, n_classes=N_CLASSES).to(device)
+    hist_pretrain = train(model, soft_ce, x, y)
+    nll_base, acc_base = evaluate(model, AdaptiveTemperatureLoss(init_T=1.0).to(device), x, y)
+    print(f"  -> NLL {nll_base:.4f} | accuracy {acc_base:.4f}\n")
+
+    # ------------------------------------------------------------------
+    # Phase 2a: calibrate T (freeze model, learn T only)
+    # ------------------------------------------------------------------
+    print("[Phase 2] Calibrating temperature (model frozen, T is learned):")
+    loss_cal = AdaptiveTemperatureLoss(init_T=1.0).to(device)
+    hist_cal = calibrate(model, loss_cal, x, y)
+    learned_T = float(loss_cal.temperature.detach())
+    learned_b = float(loss_cal.base.detach())
+    nll_cal, acc_cal = evaluate(model, loss_cal, x, y)
     print(f"  -> learned T = {learned_T:.3f}  (planted {PLANTED_TEMP})")
     print(f"  -> learned base b = e^(1/T) = {learned_b:.3f}  (standard CE uses b=e={math.e:.3f})")
-    print(f"  -> NLL {nll_a:.4f} | accuracy {acc_a:.4f}\n")
-
-    print("[2] Baseline: standard cross-entropy (T fixed at 1, b fixed at e):")
-    model_b = MLP(in_dim=IN_DIM, n_classes=N_CLASSES).to(device)
-    ce = nn.CrossEntropyLoss()
-    hist_b = train(model_b, ce, x, y)
-    nll_b, acc_b = evaluate(model_b, ce, x, y)
-    print(f"  -> NLL {nll_b:.4f} | accuracy {acc_b:.4f}\n")
+    print(f"  -> NLL {nll_cal:.4f} | accuracy {acc_cal:.4f}\n")
 
     print("Summary")
-    print(f"  adaptive CE  NLL {nll_a:.4f}  acc {acc_a:.4f}  (T={learned_T:.2f}, b={learned_b:.2f})")
-    print(f"  standard CE  NLL {nll_b:.4f}  acc {acc_b:.4f}  (T=1.00, b={math.e:.2f})")
+    print(f"  calibrated   NLL {nll_cal:.4f}  acc {acc_cal:.4f}  (T={learned_T:.2f}, b={learned_b:.2f})")
+    print(f"  uncalibrated NLL {nll_base:.4f}  acc {acc_base:.4f}  (T=1.00, b={math.e:.2f})")
 
     # --- training curves ---
     fig_t, axes_t = plt.subplots(1, 2, figsize=(12, 4))
     fig_t.suptitle("Training curves", fontsize=13)
 
-    axes_t[0].plot(hist_a["epoch"], hist_a["loss"], label="adaptive CE", color="crimson")
-    axes_t[0].plot(hist_b["epoch"], hist_b["loss"], label="standard CE", color="steelblue")
-    axes_t[0].set_xscale("linear")
+    axes_t[0].plot(hist_pretrain["epoch"], hist_pretrain["loss"], label="pre-train (T=1)", color="steelblue")
+    axes_t[0].plot([e + len(hist_pretrain["epoch"]) for e in hist_cal["epoch"]],
+                   hist_cal["loss"], label="calibration (T learned)", color="crimson")
+    axes_t[0].set_xscale("log")
     axes_t[0].set_yscale("linear")
     axes_t[0].set_xlabel("epoch")
     axes_t[0].set_ylabel("loss")
     axes_t[0].set_title("Loss vs epoch")
     axes_t[0].legend()
 
-    axes_t[1].plot(hist_a["epoch"], hist_a["temperature"], color="crimson")
+    axes_t[1].plot(hist_cal["epoch"], hist_cal["temperature"], color="crimson")
     axes_t[1].axhline(PLANTED_TEMP, linestyle="--", color="black", linewidth=1,
                       label=f"planted T={PLANTED_TEMP}")
-    axes_t[1].set_xscale("linear")
-    axes_t[1].set_xlabel("epoch")
+    axes_t[1].set_xscale("log")
+    axes_t[1].set_xlabel("calibration epoch")
     axes_t[1].set_ylabel("temperature  T = 1 / log(base)")
-    axes_t[1].set_title("Temperature vs epoch  (adaptive model)")
+    axes_t[1].set_title("Temperature vs epoch  (calibration phase)")
     axes_t[1].legend()
 
     plt.tight_layout()
     plt.savefig("training_curves2.png", dpi=150)
 
-    # --- accuracy bar chart ---
+    # --- NLL bar chart ---
     fig_r, ax_r = plt.subplots(figsize=(6, 4))
-    labels = [f"Adaptive CE\n(T={learned_T:.2f}, b={learned_b:.2f})",
-              f"Standard CE\n(T=1.00, b={math.e:.2f})"]
-    accs = [acc_a, acc_b]
-    bars = ax_r.bar(labels, accs, color=["crimson", "steelblue"], width=0.4)
+    labels = [f"Calibrated\n(T={learned_T:.2f}, b={learned_b:.2f})",
+              f"Uncalibrated\n(T=1.00, b={math.e:.2f})"]
+    nlls = [nll_cal, nll_base]
+    bars = ax_r.bar(labels, nlls, color=["crimson", "steelblue"], width=0.4)
     ax_r.bar_label(bars, fmt="%.4f", padding=3)
-    ax_r.set_ylim(0, 1.05)
-    ax_r.set_ylabel("accuracy")
-    ax_r.set_title(f"Classification accuracy  (planted T={PLANTED_TEMP})")
+    ax_r.set_ylabel("NLL (lower is better)")
+    ax_r.set_title(f"Calibration results  (planted T={PLANTED_TEMP})")
     plt.tight_layout()
     plt.savefig("results2.png", dpi=150)
 

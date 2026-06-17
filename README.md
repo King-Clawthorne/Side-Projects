@@ -127,9 +127,10 @@ Design a learnable cross-entropy whose temperature T = 1/log(b) adapts to the la
 
 Implemented `AI/idea2.py`, the classification analog of `idea.py`:
 
-- **`AdaptiveTemperatureLoss`** — wraps `F.cross_entropy(logits / T, targets)` where T is a sigmoid-bounded learnable parameter. The temperature-scaled NLL is the full NLL of a softmax model at temperature T (not just a scaled version of standard CE), so it is identifiable with weight decay preventing T→0 collapse.
-- **Degeneracy analysis** — the bare log_b loss is a 1/log(b) scaling of standard CE; minimizing over b alone always pushes b→∞. The fix is using the full temperature-scaled NLL where T enters inside the log-sum-exp.
-- **Synthetic benchmark** — labels sampled from softmax(f*(x)/T_planted); adaptive model learns T alongside the network, baseline uses standard CE (T=1).
+- **`AdaptiveTemperatureLoss`** — soft-label cross-entropy `-sum_k p_k log softmax(f/T)_k` where T is a sigmoid-bounded learnable parameter.
+- **Two degeneracy traps identified and resolved** — (1) the bare log_b loss is a 1/log(b) scaling of standard CE, so b→∞ is free; (2) even with soft labels, joint model+T training collapses T→T_min because large logits and small T trade off identically. Both are documented in the module docstring.
+- **Fix — two-phase temperature scaling calibration** (Guo et al. 2017): Phase 1 trains the model with standard CE to learn the decision boundary; Phase 2 freezes the model and learns T alone. With fixed logits the scale/temperature degeneracy is broken and T is fully identifiable.
+- **Synthetic benchmark** — soft labels from softmax(W*x / T_planted); calibrated model recovers T≈T_planted, uncalibrated baseline uses T=1.
 
 ### Result (Adaptive CE)
 
