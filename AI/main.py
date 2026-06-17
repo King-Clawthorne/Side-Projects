@@ -77,15 +77,13 @@ N_LAYERS     = 2
 D_FF         = 512
 DROPOUT      = 0.0
 
-LAYERSCALE_INIT = 1e-1      # per-channel residual-branch scale init (CaiT LayerScale)
 ROPE_BASE     = 10000.0     # rotary position embedding base frequency
 RMS_EPS       = 1e-6
 
 N_SAMPLES    = 400_000      # random examples
 BATCH_SIZE   = 512
 EPOCHS       = 100
-LR           = 1e-3          # AdamW lr (embeddings, head, biases, norms)
-MUON_LR      = 2e-2          # Muon lr (2D hidden weight matrices)
+LR           = 1e-3          # AdamW lr (all parameters)
 WEIGHT_DECAY = 1e-2
 WARMUP_FRAC  = 0.05          # fraction of training steps spent in linear warmup
 MIN_LR_FRAC  = 0.0           # final lr as a fraction of peak (cosine floor)
@@ -150,58 +148,6 @@ def make_dataset(n_samples=N_SAMPLES, seed=SEED):
 
 
 # ----------------------------------------------------------------------------- #
-# Muon optimizer (MomentUm Orthogonalized by Newton-schulz)
-# Reference implementation: https://github.com/KellerJordan/Muon
-# ----------------------------------------------------------------------------- #
-@torch.no_grad()
-def zeropower_via_newtonschulz5(G, steps=5):
-    """Orthogonalize G via a quintic Newton-Schulz iteration."""
-    assert G.ndim >= 2
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
-    if G.size(-2) > G.size(-1):
-        X = X.mT
-    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
-    for _ in range(steps):
-        A = X @ X.mT
-        B = b * A + c * A @ A
-        X = a * X + B @ X
-    if G.size(-2) > G.size(-1):
-        X = X.mT
-    return X.to(G.dtype)
-
-
-class Muon(torch.optim.Optimizer):
-    """Muon for 2D hidden weights. Use AdamW for everything else."""
-
-    def __init__(self, params, lr=0.02, momentum=0.95, nesterov=True, ns_steps=5,
-                 weight_decay=0.0):
-        defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov,
-                        ns_steps=ns_steps, weight_decay=weight_decay)
-        super().__init__(params, defaults)
-
-    @torch.no_grad()
-    def step(self):
-        for group in self.param_groups:
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                g = p.grad
-                state = self.state[p]
-                if "momentum_buffer" not in state:
-                    state["momentum_buffer"] = torch.zeros_like(g)
-                buf = state["momentum_buffer"]
-                buf.lerp_(g, 1 - group["momentum"])
-                g = g.lerp_(buf, group["momentum"]) if group["nesterov"] else buf
-                g = zeropower_via_newtonschulz5(g, steps=group["ns_steps"])
-                # scale so the update RMS is roughly consistent across shapes
-                scale = max(1, p.size(-2) / p.size(-1)) ** 0.5
-                if group["weight_decay"] != 0:
-                    p.mul_(1 - group["lr"] * group["weight_decay"])
-                p.add_(g, alpha=-group["lr"] * scale)
-
-
-# ----------------------------------------------------------------------------- #
 # Rotary position embeddings (RoPE, Su et al. 2021), Liger NeoX convention.
 # ----------------------------------------------------------------------------- #
 def build_rope_cache(seq_len, head_dim, device, base=ROPE_BASE):
@@ -217,21 +163,6 @@ def build_rope_cache(seq_len, head_dim, device, base=ROPE_BASE):
 # ----------------------------------------------------------------------------- #
 # Model
 # ----------------------------------------------------------------------------- #
-class LayerScale(nn.Module):
-    """Per-channel learnable scaling of a residual branch (CaiT, Touvron 2021).
-
-    Init near zero so each block starts close to the identity, which stabilizes
-    the early training of deep pre-norm transformers.
-    """
-
-    def __init__(self, d_model, init=LAYERSCALE_INIT):
-        super().__init__()
-        self.gamma = nn.Parameter(torch.full((d_model,), float(init)))
-
-    def forward(self, x):
-        return x * self.gamma
-
-
 class SwiGLU(nn.Module):
     """SwiGLU feed-forward (Shazeer 2020): down(SiLU(gate(x)) * up(x)).
 
@@ -249,23 +180,20 @@ class SwiGLU(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    """Causal multi-head self-attention with QK-norm, QK-gain, RoPE and value
-    residuals, using fused scaled-dot-product attention.
+    """Causal multi-head self-attention with QK-norm, QK-gain and RoPE, using
+    fused scaled-dot-product attention.
 
-    QK-norm        : RMS-normalize query/key vectors along the head dim.
-    QK-gain        : a learnable per-head scalar replacing the fixed softmax
-                     scale; folded into the query so SDPA runs with scale=1.
-    RoPE           : Liger fused rotary embedding on queries and keys.
-    value residual : mix this layer's values with the first layer's values via a
-                     learnable per-head gate (Zhou et al. 2024).
+    QK-norm : RMS-normalize query/key vectors along the head dim.
+    QK-gain : a learnable per-head scalar replacing the fixed softmax scale;
+              folded into the query so SDPA runs with scale=1.
+    RoPE    : Liger fused rotary embedding on queries and keys.
     """
 
-    def __init__(self, d_model, n_heads, dropout=0.0, value_residual=False):
+    def __init__(self, d_model, n_heads, dropout=0.0):
         super().__init__()
         assert d_model % n_heads == 0
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
-        self.value_residual = value_residual
 
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
@@ -277,21 +205,12 @@ class MultiHeadAttention(nn.Module):
         init_gain = self.head_dim ** -0.5
         self.qk_gain = nn.Parameter(torch.full((n_heads, 1, 1), float(init_gain)))
 
-        # Value-residual gate: per-head mix weight, init 0.5 (equal blend).
-        if value_residual:
-            self.v_lambda = nn.Parameter(torch.full((n_heads, 1, 1), 0.5))
-
-    def forward(self, x, v_first=None, rope=None):
+    def forward(self, x, rope=None):
         B, T, _ = x.shape
         # (B, n_heads, T, head_dim)
         q = self.q_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-
-        # Value residual: blend with the first layer's values.
-        if self.value_residual and v_first is not None:
-            lam = self.v_lambda
-            v = lam * v + (1.0 - lam) * v_first
 
         # QK-norm: RMS-normalize along head_dim, then fold in the per-head gain.
         q = F.normalize(q, p=2, dim=-1) * (self.head_dim ** 0.5)
@@ -309,28 +228,24 @@ class MultiHeadAttention(nn.Module):
             q, k, v, is_causal=True, scale=1.0,
             dropout_p=self.dropout if self.training else 0.0)
         out = out.transpose(1, 2).reshape(B, T, -1)
-        return self.out_proj(out), v
+        return self.out_proj(out)
 
 
 class DecoderLayer(nn.Module):
-    """Pre-norm transformer block: RMSNorm + attention + SwiGLU, LayerScale on
-    both residual branches."""
+    """Pre-norm transformer block: RMSNorm + attention + SwiGLU."""
 
-    def __init__(self, d_model, n_heads, d_ff, dropout=0.0, value_residual=False):
+    def __init__(self, d_model, n_heads, d_ff, dropout=0.0):
         super().__init__()
         self.norm1 = LigerRMSNorm(d_model, eps=RMS_EPS)
-        self.attn = MultiHeadAttention(d_model, n_heads, dropout, value_residual)
-        self.ls1 = LayerScale(d_model)
+        self.attn = MultiHeadAttention(d_model, n_heads, dropout)
         self.norm2 = LigerRMSNorm(d_model, eps=RMS_EPS)
         self.ff = SwiGLU(d_model, d_ff)
-        self.ls2 = LayerScale(d_model)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, v_first=None, rope=None):
-        attn_out, v = self.attn(self.norm1(x), v_first, rope)
-        x = x + self.dropout(self.ls1(attn_out))
-        x = x + self.dropout(self.ls2(self.ff(self.norm2(x))))
-        return x, v
+    def forward(self, x, rope=None):
+        x = x + self.dropout(self.attn(self.norm1(x), rope))
+        x = x + self.dropout(self.ff(self.norm2(x)))
+        return x
 
 
 class TransformerLM(nn.Module):
@@ -343,10 +258,9 @@ class TransformerLM(nn.Module):
         self.tok_emb = nn.Embedding(VOCAB_SIZE, D_MODEL)
         # Positions are encoded with RoPE inside attention (no learned pos_emb).
 
-        # First layer sources the value residual; later layers consume it.
         self.layers = nn.ModuleList(
-            DecoderLayer(D_MODEL, N_HEADS, D_FF, DROPOUT, value_residual=(i > 0))
-            for i in range(N_LAYERS)
+            DecoderLayer(D_MODEL, N_HEADS, D_FF, DROPOUT)
+            for _ in range(N_LAYERS)
         )
         self.norm = LigerRMSNorm(D_MODEL, eps=RMS_EPS)
         self.head = nn.Linear(D_MODEL, VOCAB_SIZE, bias=False)
@@ -356,11 +270,8 @@ class TransformerLM(nn.Module):
         B, T = x.shape
         rope = build_rope_cache(T, D_MODEL // N_HEADS, x.device)
         h = self.tok_emb(x)
-        v_first = None
         for layer in self.layers:
-            h, v = layer(h, v_first, rope)
-            if v_first is None:
-                v_first = v                           # capture first-layer values
+            h = layer(h, rope)
         return self.norm(h)
 
 
@@ -424,21 +335,10 @@ def main():
     model = TransformerLM().to(DEVICE)
     fwd = torch.compile(model, mode=COMPILE_MODE) if COMPILE else model
 
-    # Muon handles the 2D hidden weight matrices inside the blocks; embeddings,
-    # the output head, and norms stay on AdamW (fused).
-    muon_params, adamw_params = [], []
-    for name, p in model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if p.ndim == 2 and "tok_emb" not in name and "head" not in name:
-            muon_params.append(p)
-        else:
-            adamw_params.append(p)
-
-    muon = Muon(muon_params, lr=MUON_LR, momentum=0.95, weight_decay=WEIGHT_DECAY)
-    adamw = torch.optim.AdamW(adamw_params, lr=LR, weight_decay=WEIGHT_DECAY,
+    # Single fused AdamW over all parameters.
+    adamw = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY,
                               fused=(DEVICE == "cuda"))
-    optimizers = [muon, adamw]
+    optimizers = [adamw]
 
     # Drop the last partial batch so every training step has the same shape,
     # which keeps torch.compile from recompiling for a different batch size.
