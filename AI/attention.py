@@ -127,14 +127,15 @@ class HigherOrderAttention(nn.Module):
     The subset enumeration is cached per sequence length T.
     """
 
-    def __init__(self, d_model, n_heads, dropout=0.0, qk_norm=True, scale=None,
-                 aggregate="sum"):
+    def __init__(self, d_model, n_heads, max_seq_len, dropout=0.0, qk_norm=True,
+                 scale=None, aggregate="sum"):
         super().__init__()
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
         assert aggregate in ("sum", "mean")
         self.d_model = d_model
         self.n_heads = n_heads
         self.head_dim = d_model // n_heads
+        self.max_seq_len = max_seq_len
         self.qk_norm = qk_norm
         self.aggregate = aggregate
         self.scale = scale if scale is not None else 1.0 / math.sqrt(self.head_dim)
@@ -150,36 +151,29 @@ class HigherOrderAttention(nn.Module):
 
         self.attn_dropout = nn.Dropout(dropout)
 
-        # Per-length cache of (membership, valid_mask) tensors, keyed by T.
-        self._subset_cache = {}
+        # Precompute the subset enumeration for the (fixed) max sequence length as
+        # non-trainable buffers. Building these once -- rather than caching tensors
+        # created inside the compiled region -- keeps their storage stable, which
+        # is required for torch.compile()'s CUDA-graph capture.
+        member, valid = self._build_subsets(max_seq_len)
+        # member: (S, T) float {0,1}; row s is the membership bitmask of subset s.
+        # valid:  (T, S) bool; valid[i, s] iff every member of s is at pos <= i.
+        self.register_buffer("subset_member", member, persistent=False)
+        self.register_buffer("subset_valid", valid, persistent=False)
 
-    def _subsets(self, T, device):
-        """Build, for sequence length T, the subset-enumeration tensors.
-
-        Returns:
-            member:  (S, T) float in {0,1}; row s lists which tokens are in
-                     subset s. S = 2^T. Subset index s is the bitmask over tokens.
-            valid:   (T, S) bool; valid[i, s] is True iff every member of subset s
-                     is at position <= i (causal: query i can use subset s).
-        """
-        key = (T, device)
-        cached = self._subset_cache.get(key)
-        if cached is not None:
-            return cached
-
+    @staticmethod
+    def _build_subsets(T):
         S = 1 << T                                  # 2^T subsets
-        subsets = torch.arange(S, device=device)
-        bit = torch.arange(T, device=device)
+        subsets = torch.arange(S)
+        bit = torch.arange(T)
         member = ((subsets[:, None] >> bit[None, :]) & 1).to(torch.float32)  # (S, T)
 
         # Highest token index present in each subset (-1 for the empty set), so
         # we can causally forbid subsets that reach past the current query.
         idx = bit[None, :].expand(S, T)
         max_idx = torch.where(member > 0, idx, torch.full_like(idx, -1)).max(dim=1).values
-        query_pos = torch.arange(T, device=device)
+        query_pos = torch.arange(T)
         valid = max_idx[None, :] <= query_pos[:, None]            # (T, S)
-
-        self._subset_cache[key] = (member, valid)
         return member, valid
 
     def _split_heads(self, t, B, T):
@@ -193,8 +187,11 @@ class HigherOrderAttention(nn.Module):
         k = self._split_heads(self.k_proj(x), B, T)
         v = self._split_heads(self.v_proj(x), B, T)
 
-        member, valid = self._subsets(T, x.device)              # (S,T), (T,S)
-        member = member.to(k.dtype)                             # match autocast dtype
+        assert T == self.max_seq_len, (
+            f"HigherOrderAttention was built for seq_len={self.max_seq_len}, "
+            f"got {T}. Pad inputs to a fixed width.")
+        member = self.subset_member.to(k.dtype)                 # (S,T), match dtype
+        valid = self.subset_valid                               # (T,S) bool
         S = member.shape[0]
 
         # Aggregate member key/value vectors per subset:

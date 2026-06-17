@@ -164,10 +164,10 @@ class SwiGLU(nn.Module):
 class DecoderLayer(nn.Module):
     """Pre-norm transformer block: RMSNorm + attention + SwiGLU."""
 
-    def __init__(self, d_model, n_heads, d_ff, dropout=0.0):
+    def __init__(self, d_model, n_heads, d_ff, max_seq_len, dropout=0.0):
         super().__init__()
         self.norm1 = LigerRMSNorm(d_model, eps=RMS_EPS)
-        self.attn = HigherOrderAttention(d_model, n_heads, dropout)
+        self.attn = HigherOrderAttention(d_model, n_heads, max_seq_len, dropout)
         self.norm2 = LigerRMSNorm(d_model, eps=RMS_EPS)
         self.ff = SwiGLU(d_model, d_ff)
         self.dropout = nn.Dropout(dropout)
@@ -188,8 +188,10 @@ class TransformerLM(nn.Module):
         # Learned absolute positional embeddings (sequences are at most MAX_LEN).
         self.pos_emb = nn.Embedding(MAX_LEN, D_MODEL)
 
+        # Every sequence runs at a fixed width (right-padded to MAX_LEN-1), which
+        # is what HigherOrderAttention enumerates its 2^T token subsets over.
         self.layers = nn.ModuleList(
-            DecoderLayer(D_MODEL, N_HEADS, D_FF, DROPOUT)
+            DecoderLayer(D_MODEL, N_HEADS, D_FF, MAX_LEN - 1, DROPOUT)
             for _ in range(N_LAYERS)
         )
         self.norm = LigerRMSNorm(D_MODEL, eps=RMS_EPS)
