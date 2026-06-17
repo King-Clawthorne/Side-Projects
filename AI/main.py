@@ -31,6 +31,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from attention import MultiHeadAttention
+
 # --- Liger fused Triton kernels (Linux + CUDA only) ------------------------- #
 try:
     from liger_kernel.transformers import LigerRMSNorm
@@ -157,45 +159,6 @@ class SwiGLU(nn.Module):
 
     def forward(self, x):
         return self.down(LigerSiLUMulFunction.apply(self.gate(x), self.up(x)))
-
-
-class MultiHeadAttention(nn.Module):
-    """Causal multi-head self-attention with QK-norm, using fused
-    scaled-dot-product attention.
-
-    QK-norm : RMS-normalize query/key vectors along the head dim.
-    """
-
-    def __init__(self, d_model, n_heads, dropout=0.0):
-        super().__init__()
-        assert d_model % n_heads == 0
-        self.n_heads = n_heads
-        self.head_dim = d_model // n_heads
-
-        self.q_proj = nn.Linear(d_model, d_model, bias=False)
-        self.k_proj = nn.Linear(d_model, d_model, bias=False)
-        self.v_proj = nn.Linear(d_model, d_model, bias=False)
-        self.out_proj = nn.Linear(d_model, d_model, bias=False)
-        self.dropout = dropout
-
-    def forward(self, x):
-        B, T, _ = x.shape
-        # (B, n_heads, T, head_dim)
-        q = self.q_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-
-        # QK-norm: RMS-normalize along head_dim.
-        q = F.normalize(q, p=2, dim=-1) * (self.head_dim ** 0.5)
-        k = F.normalize(k, p=2, dim=-1) * (self.head_dim ** 0.5)
-
-        # Fused causal SDPA (FlashAttention). Right-padding + causality means no
-        # explicit pad mask is needed. Default scale = 1/sqrt(head_dim).
-        out = F.scaled_dot_product_attention(
-            q, k, v, is_causal=True,
-            dropout_p=self.dropout if self.training else 0.0)
-        out = out.transpose(1, 2).reshape(B, T, -1)
-        return self.out_proj(out)
 
 
 class DecoderLayer(nn.Module):
