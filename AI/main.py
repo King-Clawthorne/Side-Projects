@@ -1,6 +1,6 @@
 """
 Linux / CUDA decoder-only transformer that learns (a +/- b) % m for
-floating-point a, b, generating the answer digit by digit.
+non-negative integers a, b, generating the answer digit by digit.
 
 Heavily fused for a Linux + NVIDIA-GPU setup:
   * torch.compile()                  -- fuses the model graph (needs Triton).
@@ -16,11 +16,11 @@ Install the extras (Linux only):
     pip install liger-kernel triton
 
 Vocabulary:
-    0..9 digits, 10 ".", 11 "+", 12 "-", 13 "%", 14 "=", 15 <eos>, 16 <pad>.
-    Sequence: [-] <digits a> Op <digits b> "%" <digits m> "=" <digits result> <eos>
-    A leading "-" marks the first operand as negative (same token as subtract).
-    Example:  9 . 1 + 6 % 2 3 = 1 5 . 1 <eos>   since (9.1 + 6) % 23 = 15.1
-    Example:  - 9 . 1 + 6 % 2 3 = 1 9 . 9 <eos> since (-9.1 + 6) % 23 = 19.9
+    0..9 digits, 10 "+", 11 "-", 12 "%", 13 "=", 14 <eos>, 15 <pad>.
+    Sequence: <digits a> Op <digits b> "%" <digits m> "=" <digits result> <eos>
+    Both operands are non-negative integers; "-" is only the subtraction operator.
+    Example:  9 + 6 % 2 3 = 1 5 <eos>   since (9 + 6) % 23 = 15
+    Example:  9 - 6 % 2 3 = 3 <eos>     since (9 - 6) % 23 = 3
     Loss is applied only to the answer tokens (everything after "=").
 
 Note: the input is right-padded and attention is purely causal, so the trailing
@@ -53,25 +53,23 @@ except ImportError as e:  # pragma: no cover
 # Config
 # ----------------------------------------------------------------------------- #
 # Digit tokens 0..9, then symbols.
-DOT_TOKEN    = 10          # "."
-PLUS_TOKEN   = 11
-MINUS_TOKEN  = 12
-MOD_TOKEN    = 13          # "%"
-EQ_TOKEN     = 14          # "=" (prompt/answer separator + decode start)
-EOS_TOKEN    = 15          # end of answer
-PAD_TOKEN    = 16
-VOCAB_SIZE   = 17
+PLUS_TOKEN   = 10
+MINUS_TOKEN  = 11
+MOD_TOKEN    = 12          # "%"
+EQ_TOKEN     = 13          # "=" (prompt/answer separator + decode start)
+EOS_TOKEN    = 14          # end of answer
+PAD_TOKEN    = 15
+VOCAB_SIZE   = 16
 
 IGNORE_INDEX = -100        # cross-entropy ignore label (non-answer positions)
 
-NUM_MAX      = 99          # operand integer part 0..99 (operands are x.y floats)
+NUM_MAX      = 99          # operand range 0..99
 MOD_MIN      = 2           # smallest modulus
 MOD_MAX      = 99          # largest modulus (integer)
 
-# Longest sequence: "-99.9 + 99.9 % 99 = 99.9 <eos>"
-#   sign 1 + operand 4 + op 1 + operand 4 + "%" 1 + mod 2 + "=" 1 + answer 4
-#   + eos 1 = 19
-MAX_LEN      = 19
+# Longest sequence: "99 + 99 % 99 = 98 <eos>"
+#   operand 2 + op 1 + operand 2 + "%" 1 + mod 2 + "=" 1 + answer 2 + eos 1 = 12
+MAX_LEN      = 12
 
 D_MODEL      = 128
 N_HEADS      = 4
@@ -83,7 +81,7 @@ LAYERSCALE_INIT = 1e-1      # per-channel residual-branch scale init (CaiT Layer
 ROPE_BASE     = 10000.0     # rotary position embedding base frequency
 RMS_EPS       = 1e-6
 
-N_SAMPLES    = 400_000      # random examples (floats make full enumeration huge)
+N_SAMPLES    = 400_000      # random examples
 BATCH_SIZE   = 512
 EPOCHS       = 100
 LR           = 1e-3          # AdamW lr (embeddings, head, biases, norms)
@@ -112,25 +110,11 @@ torch.backends.cudnn.benchmark = True
 
 # ----------------------------------------------------------------------------- #
 # Data: random (a, op, b, %, mod) examples rendered as causal-LM sequences.
-# Numbers are spelled character by character; arithmetic is in integer tenths.
+# Numbers are spelled digit by digit as integers.
 # ----------------------------------------------------------------------------- #
 def _digit_tokens(v):
     """Decimal digits of a non-negative integer v as a list of digit tokens."""
     return [int(c) for c in str(v)]
-
-
-def _number_tokens(tenths, is_float):
-    """Render a value given in tenths as number tokens."""
-    if is_float:
-        return _digit_tokens(tenths // 10) + [DOT_TOKEN, tenths % 10]
-    return _digit_tokens(tenths // 10)
-
-
-def _result_tokens(tenths):
-    """Render a result in tenths, using a decimal point only when fractional."""
-    if tenths % 10 == 0:
-        return _digit_tokens(tenths // 10)
-    return _digit_tokens(tenths // 10) + [DOT_TOKEN, tenths % 10]
 
 
 def make_dataset(n_samples=N_SAMPLES, seed=SEED):
@@ -138,30 +122,16 @@ def make_dataset(n_samples=N_SAMPLES, seed=SEED):
     inputs, labels = [], []
 
     for _ in range(n_samples):
-        # The first operand may be negative, written with a leading "-" token.
-        def sample_operand(allow_negative=False):
-            if rng.random() < 0.5:                     # integer operand
-                v = rng.randint(0, NUM_MAX)
-                t = v * 10
-                tok = _number_tokens(t, is_float=False)
-            else:                                       # float operand (tenths)
-                t = rng.randint(0, NUM_MAX * 10 + 9)
-                tok = _number_tokens(t, is_float=True)
-            if allow_negative and t > 0 and rng.random() < 0.5:
-                t, tok = -t, [MINUS_TOKEN] + tok
-            return t, tok
-
-        a_t, a_tok = sample_operand(allow_negative=True)
-        b_t, b_tok = sample_operand()
+        a = rng.randint(0, NUM_MAX)
+        b = rng.randint(0, NUM_MAX)
         m = rng.randint(MOD_MIN, MOD_MAX)
         is_sub = rng.random() < 0.5
         op_tok = MINUS_TOKEN if is_sub else PLUS_TOKEN
 
-        raw_t = a_t - b_t if is_sub else a_t + b_t
-        res_t = raw_t % (m * 10)                        # exact, in tenths
+        res = (a - b if is_sub else a + b) % m
 
-        prompt = a_tok + [op_tok] + b_tok + [MOD_TOKEN] + _digit_tokens(m)
-        full = prompt + [EQ_TOKEN] + _result_tokens(res_t) + [EOS_TOKEN]
+        prompt = _digit_tokens(a) + [op_tok] + _digit_tokens(b) + [MOD_TOKEN] + _digit_tokens(m)
+        full = prompt + [EQ_TOKEN] + _digit_tokens(res) + [EOS_TOKEN]
 
         inp = full[:-1]
         lab = full[1:]
@@ -508,11 +478,12 @@ def main():
             for sched in schedulers:
                 sched.step()
 
-        tr_loss, tr_acc = evaluate(fwd, model.head, train_x, train_y)
-        te_loss, te_acc = evaluate(fwd, model.head, test_x, test_y)
-        print(f"epoch {epoch:3d} | "
-                f"train loss {tr_loss:.4f} tok-acc {tr_acc:.3f} | "
-                f"test loss {te_loss:.4f} tok-acc {te_acc:.3f}")
+        if epoch % 10 == 0 or epoch == EPOCHS or epoch == 1:
+            tr_loss, tr_acc = evaluate(fwd, model.head, train_x, train_y)
+            te_loss, te_acc = evaluate(fwd, model.head, test_x, test_y)
+            print(f"epoch {epoch:3d} | "
+                    f"train loss {tr_loss:.4f} tok-acc {tr_acc:.3f} | "
+                    f"test loss {te_loss:.4f} tok-acc {te_acc:.3f}")
 
     # quick sanity check
     demo(model)
@@ -522,29 +493,15 @@ def main():
 # Generation / demo
 # ----------------------------------------------------------------------------- #
 def _operand_tokens(val):
-    """Tokens + tenths for a demo operand given as an int or one-decimal float.
-
-    Negative values get a leading "-" token.
-    """
-    neg = val < 0
-    mag = abs(val)
-    if isinstance(val, int):
-        tenths, tok = mag * 10, _number_tokens(mag * 10, is_float=False)
-    else:
-        tenths = round(mag * 10)
-        tok = _number_tokens(tenths, is_float=True)
-    if neg:
-        tenths, tok = -tenths, [MINUS_TOKEN] + tok
-    return tok, tenths
+    """Digit tokens for a non-negative integer demo operand."""
+    return _digit_tokens(val), val
 
 
 def _decode(tokens):
     """Turn answer tokens back into a human-readable string."""
     out = []
     for t in tokens:
-        if t == DOT_TOKEN:
-            out.append(".")
-        elif 0 <= t <= 9:
+        if 0 <= t <= 9:
             out.append(str(t))
         else:
             break
@@ -580,22 +537,20 @@ def generate(model, prompt_ids):
 def demo(model):
     print("\n--- demo ---")
     cases = [
-        ("+", 9.1, 6, 23), ("+", 13, 26, 5), ("+", 0.5, 0.5, 7),
-        ("+", -9.1, 6, 23), ("-", -3.1, 5, 7),
-        ("-", 13.2, 26, 5), ("-", 3, 7.5, 12), ("-", -88.8, 99, 2),
+        ("+", 9, 6, 23), ("+", 13, 26, 5), ("+", 50, 50, 7),
+        ("+", 99, 99, 7), ("-", 3, 5, 7),
+        ("-", 13, 26, 5), ("-", 3, 7, 12), ("-", 88, 99, 2),
     ]
     op_token = {"+": PLUS_TOKEN, "-": MINUS_TOKEN}
     for op, a, b, mod in cases:
-        a_tok, a_t = _operand_tokens(a)
-        b_tok, b_t = _operand_tokens(b)
+        a_tok, a_val = _operand_tokens(a)
+        b_tok, b_val = _operand_tokens(b)
         prompt = a_tok + [op_token[op]] + b_tok + [MOD_TOKEN] \
             + _digit_tokens(mod) + [EQ_TOKEN]
         pred = _decode(generate(model, prompt))
 
-        raw_t = a_t - b_t if op == "-" else a_t + b_t
-        res_t = raw_t % (mod * 10)
-        true = _decode(_result_tokens(res_t))
-        print(f"{a:>6} {op} {b:>6} % {mod:>2} = {pred:>6}   (true {true})")
+        true = str((a_val - b_val if op == "-" else a_val + b_val) % mod)
+        print(f"{a:>3} {op} {b:>3} % {mod:>2} = {pred:>3}   (true {true})")
 
 
 if __name__ == "__main__":
