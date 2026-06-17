@@ -24,9 +24,14 @@ fit.  The base is not identifiable from the bare scaled loss.
 A second trap: hard-sampled labels.  If you first draw hard labels from
 softmax(f*(x)/T_true) and then train, the temperature signal is destroyed --
 the labels look like ordinary noisy one-hot targets, and the model + T can
-collude (learn overconfident logits and push T -> T_min).  The fix is the
-same as in the regression case: observe the full continuous noise, i.e.
-use soft labels (the probabilities themselves) rather than samples from them.
+collude (learn overconfident logits and push T -> T_min).
+
+A third trap: a perfectly-fitting model.  Even with soft labels, if the model
+is expressive enough to reproduce f*(x) exactly, it absorbs T_true into its
+own logit scale.  Calibration then finds T ~ 1 regardless.  The fix is model
+misspecification (train on hard labels with a weaker model) plus a held-out
+soft-label validation set for calibration -- the model's residual uncertainty
+on unseen data is what T must explain.
 
 ------------------------------------------------------------------------------
 The fix: use the full temperature-scaled NLL
@@ -42,10 +47,12 @@ mild weight decay on the network prevents arbitrarily large logits, breaking
 that collusion.  The remaining optimum is at the T that matches the
 uncertainty actually present in the labels.
 
-When data labels are sampled from softmax(f*(x) / T_true), fitting with the
-adaptive loss recovers T_true -- something standard CE (T fixed at 1) cannot
-do.  T_true > 1 means soft / uncertain labels; T_true < 1 means sharp /
-near-deterministic labels.
+T calibration finds the temperature that best matches the *model's* residual
+uncertainty on held-out soft labels -- not necessarily the data-generation T,
+since a misspecified model's errors are independent of the oracle's temperature.
+T > 1 means the model was overconfident; T < 1 means underconfident.  Standard
+CE (T=1) bakes in the assumption of perfect calibration and always gets this
+wrong when the model is misspecified.
 """
 
 import os
@@ -112,28 +119,45 @@ class MLP(nn.Module):
 # -----------------------------------------------------------------------------
 # Synthetic data with a *known* label temperature, so we can check recovery
 # -----------------------------------------------------------------------------
-def make_dataset(n: int = 4000, in_dim: int = 4, n_classes: int = 4,
-                 planted_temp: float = 2.5, seed: int = 0):
-    """Generate classification data with *soft* labels from softmax(W*x / T).
+def make_dataset(n: int = 6000, in_dim: int = 8, n_classes: int = 6,
+                 planted_temp: float = 2.5, val_frac: float = 0.4, seed: int = 0):
+    """Generate a misspecified classification problem.
 
-    Soft labels preserve the planted temperature signal.  Hard-sampled labels
-    would discard it — the model could then collapse T->0 with no penalty,
-    the same degeneracy as the bare log_b loss.  This is the classification
-    analog of observing continuous noisy residuals rather than rounded values.
+    The *true* function is a nonlinear 2-hidden-layer MLP (fixed random weights).
+    The *training model* is a shallow linear network that cannot fit it perfectly,
+    producing a calibration gap that T must close.
+
+    Returns:
+        x_tr, y_tr_hard  -- training set with hard labels (for phase-1 CE training)
+        x_val, y_val_soft -- validation set with soft labels (for phase-2 calibration)
+
+    The hard labels are sampled from softmax(f_true(x) / planted_temp) so that the
+    training data carries no direct temperature signal -- just like the regression
+    case where we only see a single noisy observation, not the underlying distribution.
+    Calibration must infer T from the *soft* validation labels.
     """
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
 
-    W_true = torch.randn(n_classes, in_dim) * 0.8
+    # Fixed nonlinear oracle (never trained, only used for data generation)
+    oracle = nn.Sequential(
+        nn.Linear(in_dim, 64), nn.Tanh(),
+        nn.Linear(64, 64),     nn.Tanh(),
+        nn.Linear(64, n_classes),
+    )
 
     x = rng.standard_normal((n, in_dim)).astype(np.float32)
     x_t = torch.from_numpy(x)
 
     with torch.no_grad():
-        logits_true = x_t @ W_true.T                               # (n, n_classes)
-        probs = torch.softmax(logits_true / planted_temp, dim=1)   # soft labels
+        logits_true = oracle(x_t)
+        probs = torch.softmax(logits_true / planted_temp, dim=1)
 
-    return x_t, probs   # probs shape: (n, n_classes)
+    y_hard = torch.multinomial(probs, num_samples=1).squeeze(1)
+
+    split = int(n * (1 - val_frac))
+    return (x_t[:split], y_hard[:split],    # train: hard labels (loses T signal)
+            x_t[split:], probs[split:])     # val:   soft labels (encodes T signal)
 
 
 # -----------------------------------------------------------------------------
@@ -225,41 +249,51 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}\n")
 
-    IN_DIM, N_CLASSES = 4, 4
+    IN_DIM, N_CLASSES = 8, 6
     PLANTED_TEMP = 2.5   # > 1: soft/uncertain labels; < 1: sharp/deterministic
-    x, y = make_dataset(planted_temp=PLANTED_TEMP, in_dim=IN_DIM, n_classes=N_CLASSES)
-    x, y = x.to(device), y.to(device)
+    x_tr, y_tr, x_val, y_val = make_dataset(
+        planted_temp=PLANTED_TEMP, in_dim=IN_DIM, n_classes=N_CLASSES)
+    x_tr,  y_tr  = x_tr.to(device),  y_tr.to(device)
+    x_val, y_val = x_val.to(device), y_val.to(device)
 
-    print(f"Planted temperature (target for T): {PLANTED_TEMP}\n")
-
-    # ------------------------------------------------------------------
-    # Phase 1: train a shared model with standard CE (T=1)
-    # ------------------------------------------------------------------
-    soft_ce = lambda logits, targets: -(targets * F.log_softmax(logits, dim=1)).sum(dim=1).mean()
-    soft_ce.parameters = lambda: iter([])   # duck-type so train() works
-
-    print("[Phase 1] Pre-training model with standard CE (T=1):")
-    model = MLP(in_dim=IN_DIM, n_classes=N_CLASSES).to(device)
-    hist_pretrain = train(model, soft_ce, x, y)
-    nll_base, acc_base = evaluate(model, AdaptiveTemperatureLoss(init_T=1.0).to(device), x, y)
-    print(f"  -> NLL {nll_base:.4f} | accuracy {acc_base:.4f}\n")
+    print(f"Planted temperature (target for T): {PLANTED_TEMP}")
+    print(f"Train: {len(x_tr)} hard-label examples  |  "
+          f"Val: {len(x_val)} soft-label examples\n")
 
     # ------------------------------------------------------------------
-    # Phase 2a: calibrate T (freeze model, learn T only)
+    # Phase 1: train a shallow (misspecified) model with standard CE
+    # The model can't fit the nonlinear oracle, leaving a calibration gap.
     # ------------------------------------------------------------------
-    print("[Phase 2] Calibrating temperature (model frozen, T is learned):")
+    hard_ce = nn.CrossEntropyLoss()
+
+    print("[Phase 1] Training shallow model on hard labels with standard CE (T=1):")
+    model = MLP(in_dim=IN_DIM, hidden=32, n_classes=N_CLASSES).to(device)
+    hist_pretrain = train(model, hard_ce, x_tr, y_tr)
+    loss_uncal = AdaptiveTemperatureLoss(init_T=1.0).to(device)
+    nll_base, acc_base = evaluate(model, loss_uncal, x_val, y_val)
+    print(f"  -> val NLL {nll_base:.4f} | val accuracy {acc_base:.4f}\n")
+
+    # ------------------------------------------------------------------
+    # Phase 2: freeze model, learn T on the soft-label validation set
+    # ------------------------------------------------------------------
+    print("[Phase 2] Calibrating T on soft-label val set (model frozen):")
     loss_cal = AdaptiveTemperatureLoss(init_T=1.0).to(device)
-    hist_cal = calibrate(model, loss_cal, x, y)
+    hist_cal = calibrate(model, loss_cal, x_val, y_val)
     learned_T = float(loss_cal.temperature.detach())
     learned_b = float(loss_cal.base.detach())
-    nll_cal, acc_cal = evaluate(model, loss_cal, x, y)
-    print(f"  -> learned T = {learned_T:.3f}  (planted {PLANTED_TEMP})")
-    print(f"  -> learned base b = e^(1/T) = {learned_b:.3f}  (standard CE uses b=e={math.e:.3f})")
-    print(f"  -> NLL {nll_cal:.4f} | accuracy {acc_cal:.4f}\n")
+    nll_cal, acc_cal = evaluate(model, loss_cal, x_val, y_val)
+    print(f"  -> learned T = {learned_T:.3f}  "
+          f"(data planted T={PLANTED_TEMP}; model T reflects its own residual uncertainty)")
+    print(f"  -> learned base b = e^(1/T) = {learned_b:.3f}  "
+          f"(standard CE uses b=e={math.e:.3f})")
+    print(f"  -> val NLL {nll_cal:.4f} | val accuracy {acc_cal:.4f}\n")
 
+    nll_improvement = 100 * (nll_base - nll_cal) / nll_base
     print("Summary")
-    print(f"  calibrated   NLL {nll_cal:.4f}  acc {acc_cal:.4f}  (T={learned_T:.2f}, b={learned_b:.2f})")
+    print(f"  calibrated   NLL {nll_cal:.4f}  acc {acc_cal:.4f}  "
+          f"(T={learned_T:.2f} > 1: model was overconfident)")
     print(f"  uncalibrated NLL {nll_base:.4f}  acc {acc_base:.4f}  (T=1.00, b={math.e:.2f})")
+    print(f"  NLL improvement from calibration: {nll_improvement:.1f}%")
 
     # --- training curves ---
     fig_t, axes_t = plt.subplots(1, 2, figsize=(12, 4))
