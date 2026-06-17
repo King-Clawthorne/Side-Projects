@@ -85,8 +85,8 @@ MIN_LR_FRAC  = 0.0           # final lr as a fraction of peak (cosine floor)
 TRAIN_FRAC   = 0.8
 SEED         = 0
 
-COMPILE      = True          # wrap the model in torch.compile()
-COMPILE_MODE = "max-autotune"  # or "default" / "reduce-overhead"
+COMPILE      = False         # wrap the model in torch.compile()
+COMPILE_MODE = "max-autotune-no-cudagraphs"  # or "default" / "reduce-overhead"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
