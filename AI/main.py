@@ -73,17 +73,17 @@ MOD_MAX      = 99          # largest modulus (integer)
 #   + eos 1 = 19
 MAX_LEN      = 19
 
-D_MODEL      = 192
-N_HEADS      = 6
-N_LAYERS     = 3
-D_FF         = 1024
+D_MODEL      = 128
+N_HEADS      = 4
+N_LAYERS     = 2
+D_FF         = 512
 DROPOUT      = 0.0
 
 LAYERSCALE_INIT = 1e-1      # per-channel residual-branch scale init (CaiT LayerScale)
 ROPE_BASE     = 10000.0     # rotary position embedding base frequency
 RMS_EPS       = 1e-6
 
-N_SAMPLES    = 600_000     # random examples (floats make full enumeration huge)
+N_SAMPLES    = 600_000      # random examples (floats make full enumeration huge)
 BATCH_SIZE   = 512
 EPOCHS       = 100
 LR           = 1e-3          # AdamW lr (embeddings, head, biases, norms)
@@ -508,12 +508,11 @@ def main():
             for sched in schedulers:
                 sched.step()
 
-        if epoch % 10 == 0 or epoch == 1:
-            tr_loss, tr_acc = evaluate(fwd, model.head, train_x, train_y)
-            te_loss, te_acc = evaluate(fwd, model.head, test_x, test_y)
-            print(f"epoch {epoch:3d} | "
-                  f"train loss {tr_loss:.4f} tok-acc {tr_acc:.3f} | "
-                  f"test loss {te_loss:.4f} tok-acc {te_acc:.3f}")
+        tr_loss, tr_acc = evaluate(fwd, model.head, train_x, train_y)
+        te_loss, te_acc = evaluate(fwd, model.head, test_x, test_y)
+        print(f"epoch {epoch:3d} | "
+                f"train loss {tr_loss:.4f} tok-acc {tr_acc:.3f} | "
+                f"test loss {te_loss:.4f} tok-acc {te_acc:.3f}")
 
     # quick sanity check
     demo(model)
