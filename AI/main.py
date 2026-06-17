@@ -27,7 +27,6 @@ supervised position from attending to it.
 """
 
 import math
-import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -57,13 +56,15 @@ VOCAB_SIZE   = 16
 
 IGNORE_INDEX = -100        # cross-entropy ignore label (non-answer positions)
 
-NUM_MAX      = 99          # operand range 0..99
+NUM_MIN      = 1           # smallest operand (single digit)
+NUM_MAX      = 9           # largest operand (single digit)
 MOD_MIN      = 2           # smallest modulus
-MOD_MAX      = 99          # largest modulus (integer)
+MOD_MAX      = 9           # largest modulus (single digit)
 
-# Longest sequence: "99 + 99 % 99 = 98 <eos>"
-#   operand 2 + op 1 + operand 2 + "%" 1 + mod 2 + "=" 1 + answer 2 + eos 1 = 12
-MAX_LEN      = 12
+# Longest sequence: "9 + 9 % 2 = 0 <eos>"
+#   operand 1 + op 1 + operand 1 + "%" 1 + mod 1 + "=" 1 + answer 1 + eos 1 = 8
+# Single-digit operands/modulus keep results single digit (res < mod <= 9).
+MAX_LEN      = 8
 
 D_MODEL      = 128
 N_HEADS      = 4
@@ -73,8 +74,7 @@ DROPOUT      = 0.0
 
 RMS_EPS       = 1e-6
 
-N_SAMPLES    = 400_000      # random examples
-BATCH_SIZE   = 512
+BATCH_SIZE   = 256
 EPOCHS       = 100
 LR           = 1e-3          # AdamW lr (all parameters)
 WEIGHT_DECAY = 1e-2
@@ -100,37 +100,37 @@ torch.backends.cudnn.benchmark = True
 
 
 # ----------------------------------------------------------------------------- #
-# Data: random (a, op, b, %, mod) examples rendered as causal-LM sequences.
-# Numbers are spelled digit by digit as integers.
+# Data: every (a, op, b, %, mod) combination rendered as a causal-LM sequence.
+# Operands and modulus are single digits, so the full space is tiny and we
+# enumerate it exhaustively instead of sampling.
 # ----------------------------------------------------------------------------- #
 def _digit_tokens(v):
     """Decimal digits of a non-negative integer v as a list of digit tokens."""
     return [int(c) for c in str(v)]
 
 
-def make_dataset(n_samples=N_SAMPLES, seed=SEED):
-    rng = random.Random(seed)
+def make_dataset():
     inputs, labels = [], []
 
-    for _ in range(n_samples):
-        a = rng.randint(0, NUM_MAX)
-        b = rng.randint(0, NUM_MAX)
-        m = rng.randint(MOD_MIN, MOD_MAX)
-        is_sub = rng.random() < 0.5
-        op_tok = MINUS_TOKEN if is_sub else PLUS_TOKEN
+    for a in range(NUM_MIN, NUM_MAX + 1):
+        for b in range(NUM_MIN, NUM_MAX + 1):
+            for m in range(MOD_MIN, MOD_MAX + 1):
+                for is_sub in (False, True):
+                    op_tok = MINUS_TOKEN if is_sub else PLUS_TOKEN
+                    res = (a - b if is_sub else a + b) % m
 
-        res = (a - b if is_sub else a + b) % m
+                    prompt = (_digit_tokens(a) + [op_tok] + _digit_tokens(b)
+                              + [MOD_TOKEN] + _digit_tokens(m))
+                    full = prompt + [EQ_TOKEN] + _digit_tokens(res) + [EOS_TOKEN]
 
-        prompt = _digit_tokens(a) + [op_tok] + _digit_tokens(b) + [MOD_TOKEN] + _digit_tokens(m)
-        full = prompt + [EQ_TOKEN] + _digit_tokens(res) + [EOS_TOKEN]
+                    inp = full[:-1]
+                    lab = full[1:]
+                    for i in range(len(prompt)):        # ignore prompt + "="
+                        lab[i] = IGNORE_INDEX
+                    inputs.append(inp)
+                    labels.append(lab)
 
-        inp = full[:-1]
-        lab = full[1:]
-        for i in range(len(prompt)):                    # ignore prompt + "="
-            lab[i] = IGNORE_INDEX
-        inputs.append(inp)
-        labels.append(lab)
-
+    n_samples = len(inputs)
     width = MAX_LEN - 1
     x = torch.full((n_samples, width), PAD_TOKEN, dtype=torch.long)
     y = torch.full((n_samples, width), IGNORE_INDEX, dtype=torch.long)
@@ -401,9 +401,9 @@ def generate(model, prompt_ids):
 def demo(model):
     print("\n--- demo ---")
     cases = [
-        ("+", 9, 6, 23), ("+", 13, 26, 5), ("+", 50, 50, 7),
-        ("+", 99, 99, 7), ("-", 3, 5, 7),
-        ("-", 13, 26, 5), ("-", 3, 7, 12), ("-", 88, 99, 2),
+        ("+", 9, 6, 2), ("+", 1, 6, 5), ("+", 5, 5, 7),
+        ("+", 9, 9, 7), ("-", 3, 5, 7),
+        ("-", 1, 6, 5), ("-", 3, 7, 2), ("-", 8, 9, 2),
     ]
     op_token = {"+": PLUS_TOKEN, "-": MINUS_TOKEN}
     for op, a, b, mod in cases:
