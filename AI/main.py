@@ -72,7 +72,7 @@ D_MODEL      = 128
 N_HEADS      = 4
 N_LAYERS     = 2
 D_FF         = 512
-DROPOUT      = 0.0
+DROPOUT      = 0.1
 
 RMS_EPS       = 1e-6
 
