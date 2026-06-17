@@ -66,6 +66,9 @@ Terrain/height_initial.raw
 # ----------------------------------------------------------------------------
 # Python / AI
 # ----------------------------------------------------------------------------
+# AI transformer experiment (removed from the repo; kept local only)
+AI/
+
 __pycache__/
 *.py[cod]
 *.pyo

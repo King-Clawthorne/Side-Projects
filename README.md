@@ -71,44 +71,9 @@ terrain_glacier 1025 200 42
 
 ---
 
-## 3. AI — Decoder-Only Transformer for Modular Arithmetic
-
-A compact transformer trained to compute `(a ± b) % m` for floating-point operands, generating the answer digit by digit.
-
-### Situation
-
-I wanted to explore whether a small decoder-only transformer could learn exact arithmetic from scratch — not approximate it, but produce correct digit sequences for modular addition and subtraction over floats.
-
-### Task
-
-Build and train a character-level causal language model on randomly generated `(a op b) % m = result` sequences, optimized for a Linux + CUDA environment.
-
-### Action
-
-Implemented `AI/main.py`, a heavily fused transformer training stack:
-
-- **Model** — 2-layer decoder-only transformer (D=128, 4 heads) with RoPE, QK-norm, QK-gain, SwiGLU FFN, LayerScale, and value residuals across layers.
-- **Fused kernels** — Liger RMSNorm, SiLU-Mul, and fused linear cross-entropy (never materializes the full logit matrix); FlashAttention via PyTorch SDPA.
-- **Optimizer** — Muon (momentum-orthogonalized Newton-Schulz) for 2D hidden weights + fused AdamW for embeddings, head, and norms; cosine LR schedule with linear warmup.
-- **Data** — 600k randomly sampled examples rendered as token sequences; operands are integers or one-decimal floats up to 99, modulus 2–99.
-
-### Result
-
-The model learns to autoregressively decode correct modular arithmetic answers. Training runs entirely on-device (dataset kept GPU-resident) with `torch.compile(mode="max-autotune")`.
-
-```bash
-pip install liger-kernel triton
-python AI/main.py
-```
-
-**Tech:** PyTorch, CUDA, Liger kernels, Triton, Muon optimizer.
-
----
-
 ## Repository Layout
 
 | Path               | Project                                                       |
 | ------------------ | ------------------------------------------------------------- |
 | `SmallGameAssets/` | Color Jumper Unity game (prefabs, scenes, scripts, settings)  |
 | `Terrain/`         | CUDA terrain & glaciation simulator and RAW outputs           |
-| `AI/`              | Decoder-only transformer for modular arithmetic (PyTorch)     |
