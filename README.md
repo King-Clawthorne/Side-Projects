@@ -71,9 +71,50 @@ terrain_glacier 1025 200 42
 
 ---
 
+---
+
+## 3. Adaptive Generalized-RMSE Regression
+
+An MLP trained with a *learnable* loss exponent that adapts to the noise structure of the data, recovering the planted noise shape rather than assuming Gaussian errors.
+
+### Situation (Adaptive Loss)
+
+Standard MSE assumes Gaussian noise. Real data often has heavier tails. Simply making the norm exponent a free parameter fails because the l_α norm is monotonically non-increasing in α — the optimizer collapses α to infinity for free, regardless of fit quality.
+
+### Task (Adaptive Loss)
+
+Design an identifiable, learnable loss that adapts its exponent α and scale s to the data, and verify that it recovers a known planted noise shape that MSE cannot detect.
+
+### Action (Adaptive Loss)
+
+Implemented `AI/idea.py`:
+
+- **`AdaptivePowerLoss`** — interprets |residual/s|^α as the NLL of a Generalized Gaussian distribution. The log-partition term `log Γ(1/α) − log α` acts as a barrier that penalizes degenerate α, making it identifiable. Both α (via sigmoid-bounded parameterization) and s (via softplus) are learned parameters.
+- **`MLP`** — small 2-layer GELU network for the regression target.
+- **Synthetic benchmark** — data generated with a planted GGD noise shape; the script trains both the adaptive model and a plain MSE baseline, then plots loss vs epoch, α vs epoch, and side-by-side fit curves.
+
+### Result (Adaptive Loss)
+
+With planted noise shape α = 1.0 (heavy-tailed), the adaptive model learns α ≈ 0.976 by epoch 500 and achieves ~30% lower MAE and RMSE on the clean signal than MSE.
+
+| Model        | MAE    | RMSE   | Learned α |
+| ------------ | ------ | ------ | --------- |
+| Adaptive NLL | 0.0140 | 0.0178 | 0.976     |
+| Baseline MSE | 0.0200 | 0.0254 | 2.00      |
+
+```bash
+python AI/idea.py
+# outputs training_curves.png and results.png
+```
+
+**Tech:** PyTorch, CUDA, NumPy, Matplotlib, Generalized Gaussian distribution.
+
+---
+
 ## Repository Layout
 
 | Path               | Project                                                       |
 | ------------------ | ------------------------------------------------------------- |
 | `SmallGameAssets/` | Color Jumper Unity game (prefabs, scenes, scripts, settings)  |
 | `Terrain/`         | CUDA terrain & glaciation simulator and RAW outputs           |
+| `AI/`              | Adaptive generalized-RMSE regression with learnable α         |
