@@ -108,7 +108,7 @@ namespace SmallGame
         // default when there are no platforms in the scene.
         ColorId NearestPlatformColor(ColorId fallback)
         {
-            var platforms = FindObjectsByType<Platform>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            var platforms = FindObjectsByType<Platform>(FindObjectsInactive.Exclude);
             Platform nearest = null;
             float best = float.MaxValue;
             Vector2 pos = rb.position;
