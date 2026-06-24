@@ -20,7 +20,7 @@ Build a complete, playable vertical-climber loop: responsive controls, a color-m
 
 Implemented the game under `SmallGameAssets/` as a set of focused `MonoBehaviour` components in the `SmallGame` namespace:
 
-- **Core loop** — `GameManager` tracks score (height climbed), best score, score multipliers, and game-over detection; `PlayerController` drives Rigidbody2D movement, screen-wrap, and color-matched bounce-or-die collisions.
+- **Core loop** — `GameManager` tracks score (height climbed), best score, score multipliers, and game-over detection; `PlayerController` drives Rigidbody2D movement, screen-wrap, and color-matched bounce collisions (off-color platforms are passed through, not fatal).
 - **Mechanics** — `ColorSwitcher` randomizes the player's color, `Platform` / `RocketPlatform` provide normal and boosted bounces, and `PlatformSpawner` generates an endless ascent.
 - **Power-ups** — shield (`ShieldPickup`), jetpack (`JetpackPickup`), spring (`SpringPickup`), and multiplier coin (`MultiplierCoin`), all sharing a `PowerupPickup` base.
 - **Presentation** — `CameraFollow`, `UIController`, and an `EffectsManager` / `OneShotParticles` system for bounce, switch, power-up, and death FX.
@@ -28,7 +28,7 @@ Implemented the game under `SmallGameAssets/` as a set of focused `MonoBehaviour
 
 ### Result (Color Jumper)
 
-A fully playable, endless color-matching climber with power-ups, particle feedback, and persistent high scores — built on a decoupled, easy-to-extend component architecture.
+A fully playable, endless color-matching climber with power-ups, particle feedback, and persistent high scores — built on a decoupled, easy-to-extend component architecture. Off-color platforms pass the player through (fall-through), keeping the action fluid while still punishing wrong-color landings via missed bounces.
 
 **Tech:** Unity (URP 2D), C#, Input System, Rigidbody2D.
 
@@ -73,9 +73,36 @@ terrain_glacier 1025 200 42
 
 ---
 
+## 3. BlazePose → Unreal Live Link
+
+Real-time webcam pose estimation streamed into Unreal Engine 5 via a custom Live Link source.
+
+### Situation (BlazePose)
+
+Driving character markers or rigs from live webcam footage inside UE5 requires bridging MediaPipe's Python output into Unreal's Live Link system — something no off-the-shelf plugin does at low latency.
+
+### Task (BlazePose)
+
+Build an end-to-end pipeline: Python captures webcam frames, runs BlazePose GHUM inference, filters the joints, and pushes them to a custom UE5 Live Link plugin over UDP — all fast enough for interactive use.
+
+### Action (BlazePose)
+
+- **Python sender** (`BlazePoseLiveLink/python/pose_sender.py`) — BlazePose GHUM Lite (model_complexity=0) for speed, vectorized One-Euro filter for smoothing, and a compact 563-byte binary UDP frame (`'UELP'` header + 34 × `float32[4]` joints in UE centimeter space).
+- **UE5 plugin** (`BlazePoseLiveLink/Plugins/BlazePoseLiveLink/`) — `FBlazePoseLiveLinkSource` runs a dedicated `TPri_AboveNormal` receive thread, parses each frame, and pushes 34 `FTransform` subjects (`BlazePose_pelvis`, `BlazePose_nose`, …) into `ILiveLinkClient`. Rotations are identity; only world-space positions are transmitted (monocular depth yields reliable position, not rotation).
+- Verified with a standalone `test_receiver.py` before any UE involvement.
+
+### Result (BlazePose)
+
+Achieves 30–60 fps end-to-end on a modern CPU with Lite model. Each Live Link subject can drive a marker Actor directly via a **Live Link Transform Controller** component, or feed an IK Rig as effector targets. The `--lock-root` flag zeroes unreliable monocular pelvis depth for cleaner results.
+
+**Tech:** Python, MediaPipe BlazePose GHUM, Unreal Engine 5, Live Link, C++ UE plugin, UDP.
+
+---
+
 ## Repository Layout
 
-| Path               | Project                                                          |
-| ------------------ | ---------------------------------------------------------------- |
-| `SmallGameAssets/` | Color Jumper Unity game (prefabs, scenes, scripts, settings)     |
-| `Terrain/`         | CUDA terrain & glaciation simulator and RAW outputs              |
+| Path                   | Project                                                          |
+| ---------------------- | ---------------------------------------------------------------- |
+| `SmallGameAssets/`     | Color Jumper Unity game (prefabs, scenes, scripts, settings)     |
+| `Terrain/`             | CUDA terrain & glaciation simulator and RAW outputs              |
+| `BlazePoseLiveLink/`   | BlazePose → UE5 Live Link (Python sender + C++ UE plugin)        |

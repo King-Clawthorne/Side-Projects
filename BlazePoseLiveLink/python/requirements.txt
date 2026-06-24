@@ -1,0 +1,5 @@
+mediapipe>=0.10.9
+opencv-python>=4.8.0
+numpy>=1.24
+# mediapipe's legacy solutions API uses descriptor attrs removed in protobuf 5
+protobuf>=4.25,<5

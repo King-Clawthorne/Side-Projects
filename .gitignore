@@ -64,6 +64,30 @@ crashlytics-build.properties
 Terrain/height_initial.raw
 
 # ----------------------------------------------------------------------------
+# Python / BlazePose Live Link
+# ----------------------------------------------------------------------------
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Bytecode cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Distribution / packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# Unreal Engine build artifacts (BlazePose plugin)
+BlazePoseLiveLink/Plugins/Binaries/
+BlazePoseLiveLink/Plugins/Intermediate/
+BlazePoseLiveLink/Plugins/Saved/
+BlazePoseLiveLink/Plugins/**/*.pdb
+
+# ----------------------------------------------------------------------------
 # OS / editor noise
 # ----------------------------------------------------------------------------
 .DS_Store
