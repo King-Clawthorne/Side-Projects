@@ -73,9 +73,9 @@ namespace SmallGame
 
         public void GrantMultiplier(float multiplier, float duration)
         {
-            // Take the stronger multiplier; refresh duration if equal.
-            if (multiplier > Multiplier) Multiplier = multiplier;
-            MultiplierTimeLeft = Mathf.Max(MultiplierTimeLeft, duration);
+            // Stack: multipliers compound and their durations add together.
+            Multiplier *= multiplier;
+            MultiplierTimeLeft += duration;
         }
 
         public void GameOver()

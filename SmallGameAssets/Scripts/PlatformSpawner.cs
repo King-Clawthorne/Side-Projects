@@ -53,6 +53,12 @@ namespace SmallGame
         public float despawnBelowY = 12f;
         public int maxDifficultyScore = 200;
 
+        [Header("Color variety")]
+        [Tooltip("How many of the most recent platforms count as a 'section'.")]
+        public int colorWindow = 6;
+        [Tooltip("Each section must contain at least this many distinct colors.")]
+        public int minDistinctColors = 3;
+
         float nextSpawnY;
         readonly List<GameObject> live = new List<GameObject>();
 
@@ -60,6 +66,9 @@ namespace SmallGame
         ColorId assumedColor;
         int sinceMatch;
         bool forceMatchNext;
+
+        // Colors of the most recently spawned platforms (sliding window).
+        readonly Queue<ColorId> recentColors = new Queue<ColorId>();
 
         void Start()
         {
@@ -69,6 +78,7 @@ namespace SmallGame
             assumedColor = pc != null ? pc.currentColor : ColorId.Red;
             sinceMatch = 0;
             forceMatchNext = false;
+            recentColors.Clear();
         }
 
         void Update()
@@ -113,7 +123,14 @@ namespace SmallGame
             float x = Random.Range(-halfW, halfW);
 
             ColorId color;
-            bool match = forceMatchNext || sinceMatch >= 1 || Random.value < CurrentMatchProb();
+            // Reachability comes first: there must always be a landable platform
+            // within one step, so a forced match overrides everything else.
+            bool mustMatch = forceMatchNext || sinceMatch >= 1;
+            // If the recent section has collapsed to too few colors, inject an
+            // off-color platform to widen the palette (unless we must match).
+            bool needVariety = recentColors.Count >= colorWindow
+                && DistinctRecentColors() < minDistinctColors;
+            bool match = mustMatch || (!needVariety && Random.value < CurrentMatchProb());
             if (match)
             {
                 color = assumedColor;
@@ -122,9 +139,10 @@ namespace SmallGame
             }
             else
             {
-                color = Palette.RandomOther(assumedColor);
+                color = PickDiverseOther(assumedColor);
                 sinceMatch++;
             }
+            RecordColor(color);
 
             // Use rocket variant occasionally, only on matching platforms
             bool useRocket = match && rocketPlatformPrefab != null && Random.value < rocketChance;
@@ -182,6 +200,38 @@ namespace SmallGame
                 coin.transform.parent = transform;
                 live.Add(coin);
             }
+        }
+
+        void RecordColor(ColorId c)
+        {
+            recentColors.Enqueue(c);
+            while (recentColors.Count > colorWindow) recentColors.Dequeue();
+        }
+
+        int DistinctRecentColors()
+        {
+            int mask = 0;
+            foreach (var c in recentColors) mask |= 1 << (int)c;
+            int count = 0;
+            while (mask != 0) { count += mask & 1; mask >>= 1; }
+            return count;
+        }
+
+        // An off-color platform color, preferring one absent from the recent
+        // window so the section keeps a healthy spread of colors.
+        ColorId PickDiverseOther(ColorId not)
+        {
+            ColorId pick = not;
+            int seen = 0;
+            for (int i = 0; i < Palette.Colors.Length; i++)
+            {
+                var c = (ColorId)i;
+                if (c == not || recentColors.Contains(c)) continue;
+                // Reservoir pick so every fresh candidate is equally likely.
+                seen++;
+                if (Random.Range(0, seen) == 0) pick = c;
+            }
+            return seen > 0 ? pick : Palette.RandomOther(not);
         }
 
         GameObject PickPowerupPrefab()

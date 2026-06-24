@@ -146,13 +146,15 @@ namespace SmallGame
 
         public void QueueBounceBoost(float multiplier)
         {
-            bounceMultiplier = Mathf.Max(bounceMultiplier, multiplier);
+            // Stack: multiple springs compound the next bounce.
+            bounceMultiplier *= multiplier;
         }
 
         public void ActivateJetpack(float duration, float speed)
         {
-            jetpackTimer = Mathf.Max(jetpackTimer, duration);
-            jetpackSpeed = speed;
+            // Stack: durations add, and the strongest speed wins.
+            jetpackTimer += duration;
+            jetpackSpeed = Mathf.Max(jetpackSpeed, speed);
             UpdateVisuals();
         }
 

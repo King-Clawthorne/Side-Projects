@@ -1,15 +1,16 @@
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 
 namespace SmallGame
 {
     public class UIController : MonoBehaviour
     {
-        public Text scoreText;
-        public Text bestText;
-        public Text multiplierText;
+        public TMP_Text scoreText;
+        public TMP_Text bestText;
+        public TMP_Text multiplierText;
         public GameObject gameOverPanel;
-        public Text finalScoreText;
+        public TMP_Text finalScoreText;
         public GameObject newRecordLabel;
         public Button restartButton;
 
