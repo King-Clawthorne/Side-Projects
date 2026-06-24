@@ -455,7 +455,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 260}
+  m_AnchoredPosition: {x: 0, y: 125}
   m_SizeDelta: {x: 900, y: 140}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &309491214
@@ -622,11 +622,11 @@ MonoBehaviour:
   multiplierCoinChance: 0.05
   cam: {fileID: 519420031}
   player: {fileID: 273256738}
-  minSpacingY: 0
+  minSpacingY: 0.5
   maxSpacingY: 1
-  minSpacingYHard: 1.9
-  maxSpacingYHard: 2.7
-  matchProbEasy: 1
+  minSpacingYHard: 1
+  maxSpacingYHard: 2
+  matchProbEasy: 0.85
   matchProbHard: 0.55
   switcherChanceEasy: 0.2
   switcherChanceHard: 0.3
@@ -811,7 +811,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SmallGame.CameraFollow
   target: {fileID: 273256738}
-  yOffset: 1.5
+  yOffset: 0
   smooth: 5
 --- !u!1 &619394800
 GameObject:
@@ -1057,7 +1057,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 150}
+  m_AnchoredPosition: {x: 0, y: -30}
   m_SizeDelta: {x: 700, y: 90}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &650759135

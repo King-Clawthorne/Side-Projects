@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
@@ -19,6 +20,10 @@ namespace SmallGame
         Rigidbody2D rb;
         SpriteRenderer sr;
         Camera cam;
+        Collider2D playerCollider;
+
+        // Platforms we're currently passing through because their color doesn't match.
+        readonly List<Collider2D> ignoredColliders = new List<Collider2D>();
 
         // Power-up state
         bool hasShield;
@@ -33,6 +38,7 @@ namespace SmallGame
         {
             rb = GetComponent<Rigidbody2D>();
             sr = GetComponent<SpriteRenderer>();
+            playerCollider = GetComponent<Collider2D>();
             cam = Camera.main;
             ApplyColor();
             UpdateVisuals();
@@ -42,11 +48,19 @@ namespace SmallGame
         {
             if (GameManager.Instance != null && GameManager.Instance.IsGameOver)
             {
-                var dv = rb.linearVelocity;
-                dv.x = 0f;
-                rb.linearVelocity = dv;
+                // Fully stop the player once dead: halt motion and freeze the body.
+                if (rb.bodyType != RigidbodyType2D.Static)
+                {
+                    rb.linearVelocity = Vector2.zero;
+                    rb.angularVelocity = 0f;
+                    rb.bodyType = RigidbodyType2D.Static;
+                }
                 return;
             }
+
+            // Game is active: make sure the body can move (e.g. after a restart).
+            if (rb.bodyType == RigidbodyType2D.Static)
+                rb.bodyType = RigidbodyType2D.Dynamic;
 
             float x = 0f;
 #if ENABLE_INPUT_SYSTEM
@@ -85,6 +99,38 @@ namespace SmallGame
         {
             currentColor = c;
             ApplyColor();
+            // Re-enable collisions with platforms we were passing through; they may
+            // now match the new color and should be landable again.
+            ClearIgnoredCollisions();
+        }
+
+        // Color of the platform nearest the player. Falls back to the supplied
+        // default when there are no platforms in the scene.
+        ColorId NearestPlatformColor(ColorId fallback)
+        {
+            var platforms = FindObjectsByType<Platform>(FindObjectsSortMode.None);
+            Platform nearest = null;
+            float best = float.MaxValue;
+            Vector2 pos = rb.position;
+            for (int i = 0; i < platforms.Length; i++)
+            {
+                float d = ((Vector2)platforms[i].transform.position - pos).sqrMagnitude;
+                if (d < best) { best = d; nearest = platforms[i]; }
+            }
+            return nearest != null ? nearest.Color : fallback;
+        }
+
+        void ClearIgnoredCollisions()
+        {
+            if (playerCollider != null)
+            {
+                for (int i = 0; i < ignoredColliders.Count; i++)
+                {
+                    if (ignoredColliders[i] != null)
+                        Physics2D.IgnoreCollision(playerCollider, ignoredColliders[i], false);
+                }
+            }
+            ignoredColliders.Clear();
         }
 
         void ApplyColor()
@@ -122,6 +168,20 @@ namespace SmallGame
             if (platform == null) platform = collision.collider.GetComponentInParent<Platform>();
             if (platform == null) return;
 
+            bool match = platform.Color == currentColor;
+
+            // Different color (and no shield): fall through the platform instead of
+            // dying. Ignore this collider so the player passes straight through it.
+            if (!match && !hasShield)
+            {
+                if (playerCollider != null)
+                {
+                    Physics2D.IgnoreCollision(playerCollider, collision.collider, true);
+                    ignoredColliders.Add(collision.collider);
+                }
+                return;
+            }
+
             bool fromAbove = false;
             Vector3 contactPoint = transform.position;
             for (int i = 0; i < collision.contactCount; i++)
@@ -134,34 +194,28 @@ namespace SmallGame
             // Jetpack ignores landings (passes through)
             if (jetpackTimer > 0f) return;
 
-            bool match = platform.Color == currentColor;
             if (!match && hasShield)
             {
+                // Shield lets the player land on an off-color platform, and is
+                // consumed when used to do so. Same-color landings don't use it.
                 hasShield = false;
                 UpdateVisuals();
-                match = true; // consume shield, treat as a successful bounce
+                match = true;
                 if (EffectsManager.Instance != null)
                     EffectsManager.Instance.Powerup(contactPoint, new Color(0.55f, 0.95f, 1f));
             }
 
-            if (match)
-            {
-                var rocket = collision.collider.GetComponent<RocketPlatform>();
-                if (rocket == null) rocket = collision.collider.GetComponentInParent<RocketPlatform>();
+            var rocket = collision.collider.GetComponent<RocketPlatform>();
+            if (rocket == null) rocket = collision.collider.GetComponentInParent<RocketPlatform>();
 
-                var v = rb.linearVelocity;
-                float vMul = bounceMultiplier * (rocket != null ? rocket.bounceMultiplier : 1f);
-                v.y = bounceVelocity * vMul;
-                if (rocket != null) v.x += rocket.horizontalKick * rocket.direction;
-                rb.linearVelocity = v;
-                if (EffectsManager.Instance != null)
-                    EffectsManager.Instance.Bounce(contactPoint, Palette.Get(currentColor));
-                bounceMultiplier = 1f;
-            }
-            else
-            {
-                if (GameManager.Instance != null) GameManager.Instance.GameOver();
-            }
+            var v = rb.linearVelocity;
+            float vMul = bounceMultiplier * (rocket != null ? rocket.bounceMultiplier : 1f);
+            v.y = bounceVelocity * vMul;
+            if (rocket != null) v.x += rocket.horizontalKick * rocket.direction;
+            rb.linearVelocity = v;
+            if (EffectsManager.Instance != null)
+                EffectsManager.Instance.Bounce(contactPoint, Palette.Get(currentColor));
+            bounceMultiplier = 1f;
         }
 
         void OnTriggerEnter2D(Collider2D other)
@@ -171,7 +225,7 @@ namespace SmallGame
             if (sw != null)
             {
                 Vector3 swPos = sw.transform.position;
-                SetColor(Palette.RandomOther(currentColor));
+                SetColor(NearestPlatformColor(Palette.RandomOther(currentColor)));
                 if (EffectsManager.Instance != null)
                     EffectsManager.Instance.Switch(swPos, Palette.Get(currentColor));
                 sw.Consume();
