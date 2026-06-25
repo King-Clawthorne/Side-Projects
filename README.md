@@ -21,16 +21,16 @@ Build a complete, playable vertical-climber loop: responsive controls, a color-m
 Implemented the game under `SmallGameAssets/` as a set of focused `MonoBehaviour` components in the `SmallGame` namespace:
 
 - **Core loop** — `GameManager` tracks score (height climbed), best score, score multipliers, and game-over detection; `PlayerController` drives Rigidbody2D movement, screen-wrap, and color-matched bounce collisions (off-color platforms are passed through, not fatal).
-- **Mechanics** — `ColorSwitcher` randomizes the player's color, `Platform` / `RocketPlatform` provide normal and boosted bounces, and `PlatformSpawner` generates an endless ascent.
-- **Power-ups** — shield (`ShieldPickup`), jetpack (`JetpackPickup`), spring (`SpringPickup`), and multiplier coin (`MultiplierCoin`), all sharing a `PowerupPickup` base.
-- **Presentation** — `CameraFollow`, `UIController`, and an `EffectsManager` / `OneShotParticles` system for bounce, switch, power-up, and death FX.
+- **Mechanics** — `ColorSwitcher` randomizes the player's color, `Platform` / `RocketPlatform` provide normal and boosted bounces, and `PlatformSpawner` generates an endless ascent with a sliding-window color-variety system that keeps the palette broad (configurable `colorWindow` and `minDistinctColors`).
+- **Power-ups** — shield (`ShieldPickup`), jetpack (`JetpackPickup`), spring (`SpringPickup`), and multiplier coin (`MultiplierCoin`), all sharing a `PowerupPickup` base. Power-ups now **stack**: multipliers compound, durations add, and multiple springs compound the next bounce.
+- **Presentation** — `CameraFollow`, `UIController` (migrated to **TextMeshPro**), and an `EffectsManager` / `OneShotParticles` system for bounce, switch, power-up, and death FX.
 - **Persistence & tooling** — `HighScore` (PlayerPrefs) and an editor `SceneBuilder` to assemble the scene.
 
 ### Result (Color Jumper)
 
 A fully playable, endless color-matching climber with power-ups, particle feedback, and persistent high scores — built on a decoupled, easy-to-extend component architecture. Off-color platforms pass the player through (fall-through), keeping the action fluid while still punishing wrong-color landings via missed bounces.
 
-**Tech:** Unity (URP 2D), C#, Input System, Rigidbody2D.
+**Tech:** Unity (URP 2D), C#, Input System, Rigidbody2D, TextMeshPro.
 
 ---
 
