@@ -50,7 +50,6 @@ namespace SmallGame
 
         [Header("Spawn / despawn")]
         public float spawnAheadY = 14f;
-        public float despawnBelowY = 12f;
         public int maxDifficultyScore = 200;
 
         [Header("Color variety")]
@@ -91,16 +90,9 @@ namespace SmallGame
                 nextSpawnY += Random.Range(CurrentMinSpacing(), CurrentMaxSpacing());
             }
 
-            float cutoff = cam.transform.position.y - despawnBelowY;
             for (int i = live.Count - 1; i >= 0; i--)
             {
-                var go = live[i];
-                if (go == null) { live.RemoveAt(i); continue; }
-                if (go.transform.position.y < cutoff)
-                {
-                    Destroy(go);
-                    live.RemoveAt(i);
-                }
+                if (live[i] == null) live.RemoveAt(i);
             }
         }
 
@@ -172,6 +164,7 @@ namespace SmallGame
                 s.transform.parent = transform;
                 live.Add(s);
                 assumedColor = Palette.RandomOther(assumedColor);
+                s.GetComponent<ColorSwitcher>().Init(assumedColor);
                 forceMatchNext = true;
                 sinceMatch = 0;
                 spawnedSwitcher = true;

@@ -9,6 +9,7 @@ namespace SmallGame
 
         public Transform player;
         public Camera cam;
+        public float deathY = -20f;
 
         public bool IsGameOver { get; private set; }
         public int Score { get; private set; }
@@ -65,7 +66,7 @@ namespace SmallGame
                 if (MultiplierTimeLeft <= 0f) { Multiplier = 1f; MultiplierTimeLeft = 0f; }
             }
 
-            if (cam != null && player.position.y < cam.transform.position.y - cam.orthographicSize - 1.5f)
+            if (player.position.y < deathY)
             {
                 GameOver();
             }

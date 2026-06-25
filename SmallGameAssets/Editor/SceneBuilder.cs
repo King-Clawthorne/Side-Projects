@@ -6,6 +6,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
+using TMPro;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem.UI;
 #endif
@@ -248,11 +249,11 @@ public static class SceneBuilder
         panel.SetActive(false);
 
         var ui = canvasGO.AddComponent<UIController>();
-        ui.scoreText = scoreGO.GetComponent<Text>();
-        ui.bestText = bestGO.GetComponent<Text>();
-        ui.multiplierText = multGO.GetComponent<Text>();
+        ui.scoreText = scoreGO.GetComponent<TMP_Text>();
+        ui.bestText = bestGO.GetComponent<TMP_Text>();
+        ui.multiplierText = multGO.GetComponent<TMP_Text>();
         ui.gameOverPanel = panel;
-        ui.finalScoreText = finalScoreGO.GetComponent<Text>();
+        ui.finalScoreText = finalScoreGO.GetComponent<TMP_Text>();
         ui.newRecordLabel = newRecGO;
         ui.restartButton = btnGO.GetComponent<Button>();
 
@@ -508,14 +509,25 @@ public static class SceneBuilder
 
     static GameObject MakeText(string name, Transform parent, string content, int size, TextAnchor anchor)
     {
-        var go = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        var go = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
         go.transform.SetParent(parent, false);
-        var t = go.GetComponent<Text>();
+        var t = go.GetComponent<TextMeshProUGUI>();
         t.text = content;
-        t.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         t.fontSize = size;
-        t.alignment = anchor;
         t.color = Color.white;
+        t.alignment = anchor switch
+        {
+            TextAnchor.UpperLeft    => TextAlignmentOptions.TopLeft,
+            TextAnchor.UpperCenter  => TextAlignmentOptions.Top,
+            TextAnchor.UpperRight   => TextAlignmentOptions.TopRight,
+            TextAnchor.MiddleLeft   => TextAlignmentOptions.Left,
+            TextAnchor.MiddleCenter => TextAlignmentOptions.Center,
+            TextAnchor.MiddleRight  => TextAlignmentOptions.Right,
+            TextAnchor.LowerLeft    => TextAlignmentOptions.BottomLeft,
+            TextAnchor.LowerCenter  => TextAlignmentOptions.Bottom,
+            TextAnchor.LowerRight   => TextAlignmentOptions.BottomRight,
+            _                       => TextAlignmentOptions.Center,
+        };
         return go;
     }
 

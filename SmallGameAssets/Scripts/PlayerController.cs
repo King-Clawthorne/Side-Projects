@@ -141,6 +141,7 @@ namespace SmallGame
         public void GrantShield()
         {
             hasShield = true;
+            ClearIgnoredCollisions();
             UpdateVisuals();
         }
 
@@ -227,7 +228,7 @@ namespace SmallGame
             if (sw != null)
             {
                 Vector3 swPos = sw.transform.position;
-                SetColor(NearestPlatformColor(Palette.RandomOther(currentColor)));
+                SetColor(sw.targetColor);
                 if (EffectsManager.Instance != null)
                     EffectsManager.Instance.Switch(swPos, Palette.Get(currentColor));
                 sw.Consume();

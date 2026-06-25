@@ -8,7 +8,6 @@ namespace SmallGame
         public float yOffset = 1.5f;
         public float smooth = 5f;
 
-        float maxY;
         float baseX;
         float baseY;
         float shakeTimer;
@@ -17,7 +16,6 @@ namespace SmallGame
 
         void Start()
         {
-            maxY = transform.position.y;
             baseX = transform.position.x;
             baseY = transform.position.y;
         }
@@ -37,10 +35,8 @@ namespace SmallGame
             if (target != null)
             {
                 float desired = target.position.y + yOffset;
-                if (desired > maxY) maxY = desired;
+                baseY = Mathf.Lerp(baseY, desired, Time.deltaTime * smooth);
             }
-
-            baseY = Mathf.Lerp(baseY, maxY, Time.deltaTime * smooth);
 
             float ox = 0f, oy = 0f;
             if (shakeTimer > 0f)
