@@ -32,12 +32,14 @@ namespace SmallGame
         {
             Spawn(bouncePrefab, pos, tint);
             if (cameraFollow != null) cameraFollow.Shake(0.05f, 0.08f);
+            SfxManager.Instance.PlayBounce();
         }
 
         public void Switch(Vector3 pos, Color tint)
         {
             Spawn(switchPrefab, pos, tint);
             if (cameraFollow != null) cameraFollow.Shake(0.12f, 0.18f);
+            SfxManager.Instance.PlaySwitch();
         }
 
         public void Powerup(Vector3 pos, Color tint)
@@ -45,12 +47,14 @@ namespace SmallGame
             // Reuse the switch burst with the powerup's tint
             Spawn(switchPrefab, pos, tint);
             if (cameraFollow != null) cameraFollow.Shake(0.08f, 0.14f);
+            SfxManager.Instance.PlayPowerup();
         }
 
         public void Death(Vector3 pos)
         {
             Spawn(deathPrefab, pos, new Color(0.95f, 0.3f, 0.3f));
             if (cameraFollow != null) cameraFollow.Shake(0.55f, 0.45f);
+            SfxManager.Instance.PlayDeath();
         }
 
         void Spawn(GameObject prefab, Vector3 pos, Color tint)

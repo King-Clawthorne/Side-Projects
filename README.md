@@ -23,14 +23,14 @@ Implemented the game under `SmallGameAssets/` as a set of focused `MonoBehaviour
 - **Core loop** — `GameManager` tracks score (height climbed), best score, score multipliers, and game-over detection; `PlayerController` drives Rigidbody2D movement, screen-wrap, and color-matched bounce collisions (off-color platforms are passed through, not fatal).
 - **Mechanics** — `ColorSwitcher` randomizes the player's color, `Platform` / `RocketPlatform` provide normal and boosted bounces, and `PlatformSpawner` generates an endless ascent with a sliding-window color-variety system that keeps the palette broad (configurable `colorWindow` and `minDistinctColors`).
 - **Power-ups** — shield (`ShieldPickup`), jetpack (`JetpackPickup`), spring (`SpringPickup`), and multiplier coin (`MultiplierCoin`), all sharing a `PowerupPickup` base. Power-ups now **stack**: multipliers compound, durations add, and multiple springs compound the next bounce.
-- **Presentation** — `CameraFollow`, `UIController` (migrated to **TextMeshPro**), and an `EffectsManager` / `OneShotParticles` system for bounce, switch, power-up, and death FX.
+- **Presentation** — `CameraFollow`, `UIController` (migrated to **TextMeshPro**), and an `EffectsManager` / `OneShotParticles` system for bounce, switch, power-up, and death FX. A self-bootstrapping `SfxManager` **procedurally synthesizes all sound effects at runtime** (sine/square sweeps, an arpeggio, and decaying noise written into `AudioClip` PCM buffers) — no audio files are shipped — and plays them through a round-robin `AudioSource` voice pool.
 - **Persistence & tooling** — `HighScore` (PlayerPrefs) and an editor `SceneBuilder` to assemble the scene.
 
 ### Result (Color Jumper)
 
 A fully playable, endless color-matching climber with power-ups, particle feedback, and persistent high scores — built on a decoupled, easy-to-extend component architecture. Off-color platforms pass the player through (fall-through), keeping the action fluid while still punishing wrong-color landings via missed bounces.
 
-**Tech:** Unity (URP 2D), C#, Input System, Rigidbody2D, TextMeshPro.
+**Tech:** Unity (URP 2D), C#, Input System, Rigidbody2D, TextMeshPro, procedural audio synthesis.
 
 ---
 
