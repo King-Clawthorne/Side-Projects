@@ -11,6 +11,25 @@ namespace SmallGame
         public GameObject deathPrefab;
         public CameraFollow cameraFollow;
 
+        [System.Serializable]
+        public struct ShakeSettings
+        {
+            [Tooltip("How far the camera kicks.")] public float amplitude;
+            [Tooltip("How long the shake lasts, in seconds.")] public float duration;
+
+            public ShakeSettings(float amplitude, float duration)
+            {
+                this.amplitude = amplitude;
+                this.duration = duration;
+            }
+        }
+
+        [Header("Camera shake per event")]
+        public ShakeSettings bounceShake = new ShakeSettings(0.05f, 0.08f);
+        public ShakeSettings switchShake = new ShakeSettings(0.12f, 0.18f);
+        public ShakeSettings powerupShake = new ShakeSettings(0.08f, 0.14f);
+        public ShakeSettings deathShake = new ShakeSettings(0.55f, 0.45f);
+
         void Awake()
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -31,14 +50,14 @@ namespace SmallGame
         public void Bounce(Vector3 pos, Color tint)
         {
             Spawn(bouncePrefab, pos, tint);
-            if (cameraFollow != null) cameraFollow.Shake(0.05f, 0.08f);
+            if (cameraFollow != null) cameraFollow.Shake(bounceShake.amplitude, bounceShake.duration);
             SfxManager.Instance.PlayBounce();
         }
 
         public void Switch(Vector3 pos, Color tint)
         {
             Spawn(switchPrefab, pos, tint);
-            if (cameraFollow != null) cameraFollow.Shake(0.12f, 0.18f);
+            if (cameraFollow != null) cameraFollow.Shake(switchShake.amplitude, switchShake.duration);
             SfxManager.Instance.PlaySwitch();
         }
 
@@ -46,14 +65,14 @@ namespace SmallGame
         {
             // Reuse the switch burst with the powerup's tint
             Spawn(switchPrefab, pos, tint);
-            if (cameraFollow != null) cameraFollow.Shake(0.08f, 0.14f);
+            if (cameraFollow != null) cameraFollow.Shake(powerupShake.amplitude, powerupShake.duration);
             SfxManager.Instance.PlayPowerup();
         }
 
         public void Death(Vector3 pos)
         {
             Spawn(deathPrefab, pos, new Color(0.95f, 0.3f, 0.3f));
-            if (cameraFollow != null) cameraFollow.Shake(0.55f, 0.45f);
+            if (cameraFollow != null) cameraFollow.Shake(deathShake.amplitude, deathShake.duration);
             SfxManager.Instance.PlayDeath();
         }
 

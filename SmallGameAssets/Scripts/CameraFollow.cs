@@ -8,6 +8,9 @@ namespace SmallGame
         public float yOffset = 1.5f;
         public float smooth = 5f;
 
+        [Tooltip("Global scale on all camera shake. Raise to make every shake stronger.")]
+        public float shakeMultiplier = 1f;
+
         float baseX;
         float baseY;
         float shakeTimer;
@@ -43,7 +46,7 @@ namespace SmallGame
             {
                 shakeTimer -= Time.deltaTime;
                 float t = Mathf.Clamp01(shakeTimer / shakeDuration);
-                Vector2 r = Random.insideUnitCircle * shakeAmplitude * t;
+                Vector2 r = Random.insideUnitCircle * shakeAmplitude * shakeMultiplier * t;
                 ox = r.x; oy = r.y;
             }
             var p = transform.position;

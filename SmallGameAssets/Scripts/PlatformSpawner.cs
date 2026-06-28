@@ -163,6 +163,8 @@ namespace SmallGame
                 var s = Instantiate(switcherPrefab, new Vector3(sx, sy, 0f), Quaternion.identity);
                 s.transform.parent = transform;
                 live.Add(s);
+                // Force a new color for the platform above the switcher; the switcher
+                // itself adopts the nearest platform's color at runtime (see ColorSwitcher).
                 assumedColor = Palette.RandomOther(assumedColor);
                 s.GetComponent<ColorSwitcher>().Init(assumedColor);
                 forceMatchNext = true;
@@ -170,7 +172,20 @@ namespace SmallGame
                 spawnedSwitcher = true;
             }
 
+            // Coin gets first pick of the bonus slot above the platform; otherwise a
+            // 100% power-up chance would always win the slot and the coin would never
+            // appear. Coin and power-ups stay mutually exclusive (same position).
             bool spawnedSomething = spawnedSwitcher;
+            if (!spawnedSomething && match && multiplierCoinPrefab != null && Random.value < multiplierCoinChance)
+            {
+                float sx = Mathf.Clamp(x + Random.Range(-1.2f, 1.2f), -halfW, halfW);
+                float sy = y + Random.Range(0.7f, 1.1f);
+                var coin = Instantiate(multiplierCoinPrefab, new Vector3(sx, sy, 0f), Quaternion.identity);
+                coin.transform.parent = transform;
+                live.Add(coin);
+                spawnedSomething = true;
+            }
+
             if (!spawnedSomething && match && Random.value < powerupChance)
             {
                 var prefab = PickPowerupPrefab();
@@ -183,15 +198,6 @@ namespace SmallGame
                     live.Add(pu);
                     spawnedSomething = true;
                 }
-            }
-
-            if (!spawnedSomething && match && multiplierCoinPrefab != null && Random.value < multiplierCoinChance)
-            {
-                float sx = Mathf.Clamp(x + Random.Range(-1.2f, 1.2f), -halfW, halfW);
-                float sy = y + Random.Range(0.7f, 1.1f);
-                var coin = Instantiate(multiplierCoinPrefab, new Vector3(sx, sy, 0f), Quaternion.identity);
-                coin.transform.parent = transform;
-                live.Add(coin);
             }
         }
 

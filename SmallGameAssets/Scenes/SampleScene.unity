@@ -831,6 +831,7 @@ MonoBehaviour:
   target: {fileID: 273256738}
   yOffset: 0
   smooth: 5
+  shakeMultiplier: 3
 --- !u!1 &566848645
 GameObject:
   m_ObjectHideFlags: 0
@@ -1600,7 +1601,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 1}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: -65, y: -75}
+  m_AnchoredPosition: {x: -65, y: -65}
   m_SizeDelta: {x: 300, y: 50}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1089558839
@@ -1650,8 +1651,8 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 40
-  m_fontSizeBase: 40
+  m_fontSize: 48
+  m_fontSizeBase: 48
   m_fontWeight: 400
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
@@ -2087,6 +2088,18 @@ MonoBehaviour:
   switchPrefab: {fileID: 4088233123825434284, guid: 1dc61833ca8cf554ba354b45045a8ac8, type: 3}
   deathPrefab: {fileID: 8503799145156163237, guid: 6941dfe2672182347bd38fb3a4b7edf8, type: 3}
   cameraFollow: {fileID: 519420033}
+  bounceShake:
+    amplitude: 0.08
+    duration: 0.08
+  switchShake:
+    amplitude: 0.12
+    duration: 0.18
+  powerupShake:
+    amplitude: 0.08
+    duration: 0.14
+  deathShake:
+    amplitude: 0.55
+    duration: 0.45
 --- !u!4 &1505003383
 Transform:
   m_ObjectHideFlags: 0

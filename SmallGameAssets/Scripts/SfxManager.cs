@@ -17,6 +17,13 @@ namespace SmallGame
         const int VoiceCount = 8;
 
         static SfxManager _instance;
+
+        // With "Enter Play Mode Options" (domain reload disabled), static fields keep
+        // their value between play sessions. Reset here so the lazy singleton always
+        // rebuilds cleanly on entering play — otherwise audio works only intermittently.
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        static void ResetStatics() => _instance = null;
+
         public static SfxManager Instance
         {
             get
