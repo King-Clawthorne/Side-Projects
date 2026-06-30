@@ -52,6 +52,18 @@ namespace SmallGame
         public float spawnAheadY = 14f;
         public int maxDifficultyScore = 200;
 
+        [Header("Power-up respawning (anti-stuck)")]
+        [Tooltip("Top up power-ups in the play area so the player can't get stuck for lack of them after falling.")]
+        public bool respawnPowerups = true;
+        [Tooltip("How often (seconds) to check the play area and top up power-ups.")]
+        public float respawnCheckInterval = 1.5f;
+        [Tooltip("Target (and maximum) power-up density: power-ups per vertical world-unit of the play area. Top-up never exceeds this.")]
+        public float targetPowerupDensity = 0.04f;
+        [Tooltip("Extra distance below the camera to include when topping up, so power-ups exist where the player falls back to.")]
+        public float respawnRegionMargin = 6f;
+        [Tooltip("Minimum vertical gap between a respawned power-up and any existing power-up.")]
+        public float respawnMinGap = 2.5f;
+
         [Header("Color variety")]
         [Tooltip("How many of the most recent platforms count as a 'section'.")]
         public int colorWindow = 6;
@@ -60,6 +72,11 @@ namespace SmallGame
 
         float nextSpawnY;
         readonly List<GameObject> live = new List<GameObject>();
+
+        // Power-up respawn scratch state (reused to avoid per-check allocations).
+        float respawnTimer;
+        readonly List<GameObject> candidatePlatforms = new List<GameObject>();
+        readonly List<float> powerupYs = new List<float>();
 
         // Reachability state
         ColorId assumedColor;
@@ -93,6 +110,90 @@ namespace SmallGame
             for (int i = live.Count - 1; i >= 0; i--)
             {
                 if (live[i] == null) live.RemoveAt(i);
+            }
+
+            if (respawnPowerups)
+            {
+                respawnTimer -= Time.deltaTime;
+                if (respawnTimer <= 0f)
+                {
+                    respawnTimer = Mathf.Max(0.1f, respawnCheckInterval);
+                    TopUpPowerups();
+                }
+            }
+        }
+
+        // Keeps the visible play area (plus a margin below the camera) stocked with
+        // power-ups up to a target density, so a player who has fallen back into an
+        // already-cleared region still has a way out instead of getting stuck.
+        void TopUpPowerups()
+        {
+            if (cam == null) return;
+
+            float halfH = cam.orthographicSize;
+            float camY = cam.transform.position.y;
+            float bottom = camY - halfH - respawnRegionMargin;
+            float top = camY + halfH;
+            float regionHeight = top - bottom;
+            if (regionHeight <= 0f) return;
+
+            // Target count is capped by the editor-tunable density; never overshoot it.
+            int target = Mathf.FloorToInt(targetPowerupDensity * regionHeight);
+            if (target <= 0) return;
+
+            candidatePlatforms.Clear();
+            powerupYs.Clear();
+            int existing = 0;
+            for (int i = 0; i < live.Count; i++)
+            {
+                var go = live[i];
+                if (go == null) continue;
+                float y = go.transform.position.y;
+                if (y < bottom || y > top) continue;
+
+                if (go.GetComponent<PowerupPickup>() != null)
+                {
+                    existing++;
+                    powerupYs.Add(y);
+                }
+                else if (go.GetComponent<Platform>() != null)
+                {
+                    candidatePlatforms.Add(go);
+                }
+            }
+
+            int toSpawn = target - existing;
+            if (toSpawn <= 0 || candidatePlatforms.Count == 0) return;
+
+            float halfW = cam.orthographicSize * cam.aspect - 1.2f;
+            int spawned = 0;
+            // Each platform is tried at most once (removed on use or rejection), so
+            // this terminates even when every candidate is too close to a power-up.
+            while (spawned < toSpawn && candidatePlatforms.Count > 0)
+            {
+                int idx = Random.Range(0, candidatePlatforms.Count);
+                var platGo = candidatePlatforms[idx];
+                candidatePlatforms.RemoveAt(idx);
+                if (platGo == null) continue;
+
+                Vector3 pp = platGo.transform.position;
+                float sy = pp.y + Random.Range(0.7f, 1.1f);
+
+                bool tooClose = false;
+                for (int k = 0; k < powerupYs.Count; k++)
+                {
+                    if (Mathf.Abs(powerupYs[k] - sy) < respawnMinGap) { tooClose = true; break; }
+                }
+                if (tooClose) continue;
+
+                var prefab = PickPowerupPrefab();
+                if (prefab == null) return;
+                float sx = Mathf.Clamp(pp.x + Random.Range(-1.2f, 1.2f), -halfW, halfW);
+                var pu = Instantiate(prefab, new Vector3(sx, sy, 0f), Quaternion.identity);
+                pu.transform.parent = transform;
+                live.Add(pu);
+                powerupYs.Add(sy);
+                spawned++;
             }
         }
 
